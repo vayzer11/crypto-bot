@@ -230,16 +230,26 @@ class CryptoAnalyzer:
 
     async def _get_json(self, url: str, params: dict = None, headers: dict = None) -> Optional[dict]:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, params=params, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as r:
-                    if r.status == 200:
-                        return await r.json()
-        except Exception:
-            return None
+            async def _get_json(self, url: str, params: dict = None, headers: dict = None) -> Optional[dict]:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, params=params, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=20)
+            ) as r:
+                if r.status == 429:
+                    await asyncio.sleep(5)
+                    async with session.get(
+                        url, params=params, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=20)
+                    ) as r2:
+                        if r2.status == 200:
+                            return await r2.json()
+                if r.status == 200:
+                    return await r.json()
+    except Exception:
         return None
+    return None
 
     def _resolve_id(self, symbol: str) -> str:
         return SYMBOL_MAP.get(symbol.upper(), symbol.lower())
@@ -580,7 +590,7 @@ class CryptoAnalyzer:
         return "\n".join(lines)
 
     # ── ПЕРЕКУПЛЕННЫЕ ─────────────────────────────────────────────────────────
-    async def find_overbought(self) -> str:
+    await asyncio.sleep(1) find_overbought(self) -> str:
         data = await self._get_json(
             f"{COINGECKO}/coins/markets",
             {"vs_currency": "usd", "order": "market_cap_desc",
@@ -616,7 +626,7 @@ class CryptoAnalyzer:
         return "\n".join(lines)
 
     # ── НОВЫЕ С ПОТЕНЦИАЛОМ ───────────────────────────────────────────────────
-    async def find_new_potential(self) -> str:
+    await asyncio.sleep(1) find_new_potential(self) -> str:
         data = await self._get_json(
             f"{COINGECKO}/coins/markets",
             {"vs_currency": "usd", "order": "gecko_desc", "per_page": 30,
@@ -652,7 +662,7 @@ class CryptoAnalyzer:
         return "\n".join(lines)
 
     # ── РИСК ДАМПА ────────────────────────────────────────────────────────────
-    async def find_dump_risk(self) -> str:
+    await asyncio.sleep(1) find_dump_risk(self) -> str:
         data, fg = await asyncio.gather(
             self._get_json(
                 f"{COINGECKO}/coins/markets",
@@ -711,7 +721,7 @@ class CryptoAnalyzer:
         return "\n".join(lines)
 
     # ── ТОП СИГНАЛЫ ───────────────────────────────────────────────────────────
-    async def top_signals(self) -> str:
+    await asyncio.sleep(1) top_signals(self) -> str:
         data, fg = await asyncio.gather(
             self._get_json(
                 f"{COINGECKO}/coins/markets",
