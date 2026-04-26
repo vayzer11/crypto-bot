@@ -469,8 +469,8 @@ class CryptoAnalyzer:
         await asyncio.sleep(1)
         data = await self._get_json(
             f"{COINGECKO}/coins/markets",
-            {"vs_currency": "usd", "order": "gecko_desc", "per_page": 30,
-             "page": 1, "price_change_percentage": "24h"}
+            {"vs_currency": "usd", "order": "volume_desc", "per_page": 50,
+            "page": 1, "price_change_percentage": "24h"}
         )
         if not data:
             return "❌ Ошибка загрузки. Попробуй позже."
