@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
