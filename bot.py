@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -50,7 +50,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
 
 def back_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="← Назад", callback_data="menu_main"))
+    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu_main"))
     return builder.as_markup()
 
 # ─── COMMANDS ─────────────────────────────────────────────────────────────────
@@ -156,53 +156,66 @@ async def text_handler(message: Message):
 
 @dp.callback_query(F.data == "menu_main")
 async def cb_main(query: CallbackQuery):
-    await query.message.edit_text(
+    await query.answer()
+    await query.message.answer(
         "👋 *Crypto Signal Bot*\nВыбери действие:",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
-    await query.answer()
 
 @dp.callback_query(F.data == "menu_analyze")
 async def cb_analyze(query: CallbackQuery):
-    await query.message.edit_text(
-        "📊 *Анализ монеты*\n\nОтправь команду:\n`/analyze BTC`\n`/analyze ETH`\n`/analyze SOL`\n\n"
-        "Или просто напиши символ монеты: `BTC`",
+    await query.answer()
+    await query.message.answer(
+        "📊 *Анализ монеты*\n\nПросто напиши символ монеты:\n`BTC` `ETH` `SOL` `RENDER` `TAO`\n\n"
+        "Или команда: `/analyze BTC`",
         parse_mode="Markdown",
         reply_markup=back_keyboard()
     )
-    await query.answer()
 
 @dp.callback_query(F.data == "menu_overbought")
 async def cb_overbought(query: CallbackQuery):
-    await query.message.edit_text("🔍 Ищу перекупленные монеты...")
-    result = await analyzer.find_overbought()
-    await query.message.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.answer("Загружаю данные...")
+    msg = await query.message.answer("🔍 Ищу перекупленные монеты (RSI > 68)...")
+    try:
+        result = await analyzer.find_overbought()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
 @dp.callback_query(F.data == "menu_new")
 async def cb_new(query: CallbackQuery):
-    await query.message.edit_text("🔍 Ищу новые монеты с потенциалом...")
-    result = await analyzer.find_new_potential()
-    await query.message.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.answer("Загружаю данные...")
+    msg = await query.message.answer("🔍 Ищу монеты с потенциалом...")
+    try:
+        result = await analyzer.find_new_potential()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
 @dp.callback_query(F.data == "menu_dump")
 async def cb_dump(query: CallbackQuery):
-    await query.message.edit_text("🔍 Ищу монеты под риском дампа...")
-    result = await analyzer.find_dump_risk()
-    await query.message.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.answer("Загружаю данные...")
+    msg = await query.message.answer("🔍 Ищу монеты под риском дампа...")
+    try:
+        result = await analyzer.find_dump_risk()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
 @dp.callback_query(F.data == "menu_signals")
 async def cb_signals(query: CallbackQuery):
-    await query.message.edit_text("🔍 Генерирую топ сигналы...")
-    result = await analyzer.top_signals()
-    await query.message.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.answer("Загружаю данные...")
+    msg = await query.message.answer("🔍 Генерирую топ сигналы...")
+    try:
+        result = await analyzer.top_signals()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
 @dp.callback_query(F.data == "menu_alerts")
 async def cb_alerts(query: CallbackQuery):
+    await query.answer()
     user_id = query.from_user.id
     alerts = alert_manager.get_user_alerts(user_id)
     if not alerts:
@@ -214,11 +227,11 @@ async def cb_alerts(query: CallbackQuery):
             lines.append(f"{i}. *{a['symbol']}* {dir_sym} ${a['price']:,.2f}")
         lines.append("\nУдалить: `/delalert 1`")
         text = "\n".join(lines)
-    await query.message.edit_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 @dp.callback_query(F.data == "menu_help")
 async def cb_help(query: CallbackQuery):
+    await query.answer()
     text = (
         "❓ *Команды бота*\n\n"
         "`/analyze BTC` — полный теханализ\n"
@@ -227,16 +240,18 @@ async def cb_help(query: CallbackQuery):
         "`/alert ETH 2500 below` — алерт ниже цены\n"
         "`/alerts` — мои алерты\n"
         "`/delalert 1` — удалить алерт №1\n\n"
+        "Или просто напиши символ: `BTC` `ETH` `SOL`\n\n"
         "*Индикаторы:*\n"
         "• RSI — перекуплен/перепродан\n"
         "• MACD — тренд и импульс\n"
         "• Bollinger Bands — волатильность\n"
-        "• EMA 20/50 — тренд\n\n"
+        "• EMA 20/50 — тренд\n"
+        "• Fear and Greed Index — настроение рынка\n"
+        "• TVL — ликвидность протокола\n\n"
         "*Сигналы:*\n"
         "🟢 ПОКУПАТЬ | 🟡 ЖДАТЬ | 🔴 ПРОДАВАТЬ"
     )
-    await query.message.edit_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
-    await query.answer()
+    await query.message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 # ─── ALERTS BACKGROUND TASK ───────────────────────────────────────────────────
 
