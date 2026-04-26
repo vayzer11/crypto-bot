@@ -7,7 +7,7 @@ import asyncio
 import logging
 import os
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -46,6 +46,9 @@ def main_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")
     )
+    builder.row(
+        InlineKeyboardButton(text="📱 Открыть приложение", web_app=WebAppInfo(url="https://vayzer11.github.io/crypto-bot/"))
+    )    
     return builder.as_markup()
 
 def back_keyboard() -> InlineKeyboardMarkup:
