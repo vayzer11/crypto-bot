@@ -1,1020 +1,1959 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>CryptoSignal Pro</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Crypto Radar</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap');
 
-  :root {
-    --bg: #080b10;
-    --bg2: #0d1117;
-    --bg3: #161b24;
-    --border: #1e2530;
-    --accent: #00f5a0;
-    --accent2: #00d4ff;
-    --red: #ff3b6b;
-    --yellow: #ffd60a;
-    --text: #e8edf5;
-    --muted: #5a6478;
-    --card: #0f1520;
-  }
+    :root {
+      --bg: #071019;
+      --bg-soft: #0e1823;
+      --panel: rgba(10, 18, 28, 0.9);
+      --panel-strong: #0d1721;
+      --line: rgba(130, 160, 190, 0.18);
+      --line-strong: rgba(130, 160, 190, 0.3);
+      --text: #eef4fb;
+      --muted: #88a0ba;
+      --green: #66f7a7;
+      --green-soft: rgba(102, 247, 167, 0.12);
+      --blue: #53c5ff;
+      --blue-soft: rgba(83, 197, 255, 0.14);
+      --amber: #ffd166;
+      --amber-soft: rgba(255, 209, 102, 0.14);
+      --red: #ff6f7f;
+      --red-soft: rgba(255, 111, 127, 0.14);
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+    }
 
-  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Syne', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(83, 197, 255, 0.16), transparent 34%),
+        radial-gradient(circle at top right, rgba(102, 247, 167, 0.14), transparent 28%),
+        linear-gradient(180deg, #071019 0%, #09131d 100%);
+      color: var(--text);
+      font-family: "Space Grotesk", sans-serif;
+      overflow-x: hidden;
+    }
 
-  /* HEADER */
-  .header {
-    position: sticky; top: 0; z-index: 100;
-    background: rgba(8,11,16,0.95);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 16px;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .logo { display: flex; align-items: center; gap: 8px; }
-  .logo-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 10px var(--accent);
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-  .logo-text { font-size: 16px; font-weight: 800; letter-spacing: -0.5px; }
-  .logo-text span { color: var(--accent); }
-  .fear-badge {
-    font-family: 'Space Mono', monospace;
-    font-size: 11px; padding: 4px 10px;
-    border-radius: 20px; font-weight: 700;
-    border: 1px solid;
-  }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
 
-  /* TABS */
-  .tabs {
-    display: flex; gap: 0;
-    background: var(--bg2);
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto; scrollbar-width: none;
-  }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tab {
-    padding: 12px 18px; font-size: 13px; font-weight: 600;
-    color: var(--muted); border: none; background: none;
-    cursor: pointer; white-space: nowrap;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s; letter-spacing: 0.3px;
-  }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tab-icon { margin-right: 6px; }
+    button,
+    input,
+    select {
+      font: inherit;
+      color: inherit;
+    }
 
-  /* PAGES */
-  .page { display: none; padding: 16px; }
-  .page.active { display: block; }
+    .app-shell {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 18px 14px 48px;
+    }
 
-  /* MARKET PAGE */
-  .market-stats {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 8px; margin-bottom: 16px;
-  }
-  .stat-card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 12px;
-    text-align: center;
-  }
-  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-  .stat-value { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 0 18px;
+      backdrop-filter: blur(14px);
+    }
 
-  .search-row {
-    display: flex; gap: 8px; margin-bottom: 12px;
-  }
-  .search-input {
-    flex: 1; background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 10px; padding: 10px 14px;
-    color: var(--text); font-family: 'Syne', sans-serif; font-size: 14px;
-    outline: none;
-  }
-  .search-input:focus { border-color: var(--accent); }
-  .filter-btn {
-    background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 10px; padding: 10px 14px;
-    color: var(--muted); cursor: pointer; font-size: 16px;
-  }
-  .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
 
-  .filter-pills {
-    display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; scrollbar-width: none;
-  }
-  .filter-pills::-webkit-scrollbar { display: none; }
-  .pill {
-    padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
-    border: 1px solid var(--border); background: var(--bg3);
-    color: var(--muted); cursor: pointer; white-space: nowrap;
-    transition: all 0.2s;
-  }
-  .pill.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .brand-kicker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
 
-  .coins-list { display: flex; flex-direction: column; gap: 8px; }
-  .coin-row {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 12px 14px;
-    display: flex; align-items: center; gap: 12px;
-    cursor: pointer; transition: all 0.2s;
-    position: relative; overflow: hidden;
-  }
-  .coin-row:active { transform: scale(0.98); }
-  .coin-row::before {
-    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-    width: 3px; border-radius: 3px 0 0 3px;
-  }
-  .coin-row.bull::before { background: var(--accent); }
-  .coin-row.bear::before { background: var(--red); }
-  .coin-row.neutral::before { background: var(--yellow); }
+    .brand-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px var(--green);
+    }
 
-  .coin-rank { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--muted); width: 20px; }
-  .coin-icon { width: 36px; height: 36px; border-radius: 50%; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
-  .coin-info { flex: 1; min-width: 0; }
-  .coin-name { font-size: 14px; font-weight: 700; }
-  .coin-sym { font-size: 11px; color: var(--muted); }
-  .coin-right { text-align: right; }
-  .coin-price { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; }
-  .coin-change { font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700; }
-  .up { color: var(--accent); }
-  .down { color: var(--red); }
-  .coin-rsi { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .brand-title {
+      font-size: clamp(24px, 4vw, 36px);
+      font-weight: 700;
+      line-height: 1;
+    }
 
-  .signal-badge {
-    font-size: 10px; font-weight: 700; padding: 2px 7px;
-    border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px;
-  }
-  .sig-buy { background: rgba(0,245,160,0.15); color: var(--accent); }
-  .sig-sell { background: rgba(255,59,107,0.15); color: var(--red); }
-  .sig-wait { background: rgba(255,214,10,0.15); color: var(--yellow); }
+    .topbar-side {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
 
-  /* COIN DETAIL */
-  .back-btn {
-    display: flex; align-items: center; gap: 8px;
-    background: none; border: none; color: var(--accent);
-    font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 600;
-    cursor: pointer; margin-bottom: 16px; padding: 0;
-  }
+    .badge {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      background: rgba(8, 16, 25, 0.8);
+      white-space: nowrap;
+    }
 
-  .coin-header-detail {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 14px; padding: 16px; margin-bottom: 12px;
-  }
-  .coin-header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-  .coin-big-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 26px; }
-  .coin-big-name { font-size: 20px; font-weight: 800; }
-  .coin-big-sym { font-size: 13px; color: var(--muted); }
-  .coin-big-price { font-family: 'Space Mono', monospace; font-size: 28px; font-weight: 700; margin-bottom: 4px; }
-  .coin-changes { display: flex; gap: 8px; flex-wrap: wrap; }
-  .change-pill {
-    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
-    padding: 3px 8px; border-radius: 6px;
-  }
+    .badge strong {
+      color: var(--text);
+      font-weight: 700;
+    }
 
-  .chart-container {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 14px; padding: 16px; margin-bottom: 12px;
-  }
-  .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .chart-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
-  .chart-periods { display: flex; gap: 4px; }
-  .period-btn {
-    padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;
-    border: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer;
-    transition: all 0.2s;
-  }
-  .period-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .ghost-btn,
+    .primary-btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      height: 40px;
+      padding: 0 14px;
+      cursor: pointer;
+      transition: 0.2s ease;
+      white-space: nowrap;
+    }
 
-  .signal-box {
-    border-radius: 14px; padding: 16px; margin-bottom: 12px;
-    border: 1px solid;
-  }
-  .signal-box.buy { background: rgba(0,245,160,0.06); border-color: rgba(0,245,160,0.3); }
-  .signal-box.sell { background: rgba(255,59,107,0.06); border-color: rgba(255,59,107,0.3); }
-  .signal-box.wait { background: rgba(255,214,10,0.06); border-color: rgba(255,214,10,0.3); }
+    .ghost-btn {
+      background: rgba(8, 16, 25, 0.82);
+      color: var(--text);
+    }
 
-  .signal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-  .signal-title { font-size: 16px; font-weight: 800; }
-  .signal-score { font-family: 'Space Mono', monospace; font-size: 24px; font-weight: 700; }
+    .ghost-btn:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
+    }
 
-  .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-  .entry-item { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 10px; }
-  .entry-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-  .entry-value { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; }
+    .primary-btn {
+      background: linear-gradient(135deg, var(--green) 0%, #80fcd5 100%);
+      border-color: transparent;
+      color: #021015;
+      font-weight: 700;
+    }
 
-  .indicators-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
-  .ind-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; text-align: center; }
-  .ind-name { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-  .ind-value { font-family: 'Space Mono', monospace; font-size: 15px; font-weight: 700; }
-  .ind-status { font-size: 10px; margin-top: 4px; font-weight: 600; }
+    .tabbar {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scrollbar-width: none;
+    }
 
-  /* RSI bar */
-  .rsi-bar-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
-  .rsi-bar-label { font-size: 12px; color: var(--muted); margin-bottom: 10px; font-weight: 600; }
-  .rsi-track { height: 8px; border-radius: 4px; background: var(--bg3); position: relative; overflow: visible; }
-  .rsi-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
-  .rsi-thumb { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--bg); box-shadow: 0 0 8px currentColor; }
-  .rsi-zones { display: flex; justify-content: space-between; margin-top: 6px; }
-  .rsi-zone-label { font-family: 'Space Mono', monospace; font-size: 9px; color: var(--muted); }
+    .tabbar::-webkit-scrollbar {
+      display: none;
+    }
 
-  /* SIGNALS PAGE */
-  .signals-list { display: flex; flex-direction: column; gap: 10px; }
-  .signal-card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 14px; padding: 14px; cursor: pointer;
-  }
-  .signal-card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .signal-coin { font-size: 16px; font-weight: 800; }
-  .signal-type-big { font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 20px; }
+    .tab {
+      min-width: 116px;
+      height: 42px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(8, 16, 25, 0.75);
+      color: var(--muted);
+      cursor: pointer;
+      transition: 0.2s ease;
+    }
 
-  .signal-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
-  .sig-detail { text-align: center; }
-  .sig-detail-label { font-size: 10px; color: var(--muted); text-transform: uppercase; margin-bottom: 2px; }
-  .sig-detail-val { font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700; }
+    .tab.active {
+      background: linear-gradient(135deg, rgba(83, 197, 255, 0.2), rgba(102, 247, 167, 0.12));
+      border-color: rgba(102, 247, 167, 0.45);
+      color: var(--text);
+    }
 
-  /* PORTFOLIO */
-  .portfolio-summary {
-    background: linear-gradient(135deg, rgba(0,245,160,0.1), rgba(0,212,255,0.1));
-    border: 1px solid rgba(0,245,160,0.2); border-radius: 16px;
-    padding: 20px; margin-bottom: 16px; text-align: center;
-  }
-  .portfolio-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
-  .portfolio-total { font-family: 'Space Mono', monospace; font-size: 36px; font-weight: 700; }
-  .portfolio-change-big { font-family: 'Space Mono', monospace; font-size: 16px; margin-top: 4px; }
+    .page {
+      display: none;
+      padding-top: 18px;
+    }
 
-  .add-coin-form {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 14px; padding: 16px; margin-bottom: 16px;
-  }
-  .form-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; }
-  .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
-  .form-input {
-    flex: 1; background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 10px; padding: 10px 12px;
-    color: var(--text); font-family: 'Syne', sans-serif; font-size: 14px;
-    outline: none;
-  }
-  .form-input:focus { border-color: var(--accent); }
-  .add-btn {
-    background: var(--accent); color: #000; border: none;
-    border-radius: 10px; padding: 10px 16px; font-family: 'Syne', sans-serif;
-    font-size: 14px; font-weight: 700; cursor: pointer;
-  }
+    .page.active {
+      display: block;
+    }
 
-  .portfolio-coins { display: flex; flex-direction: column; gap: 8px; }
-  .portfolio-coin {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .port-coin-info { flex: 1; }
-  .port-coin-name { font-size: 14px; font-weight: 700; }
-  .port-coin-amount { font-size: 12px; color: var(--muted); }
-  .port-coin-values { text-align: right; }
-  .port-coin-value { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; }
-  .port-coin-pnl { font-family: 'Space Mono', monospace; font-size: 12px; }
-  .remove-btn { background: rgba(255,59,107,0.1); border: 1px solid rgba(255,59,107,0.2); border-radius: 8px; padding: 6px 10px; color: var(--red); cursor: pointer; font-size: 14px; }
+    .hero-grid,
+    .stats-grid,
+    .market-grid,
+    .screener-grid,
+    .news-grid,
+    .watch-grid,
+    .detail-grid,
+    .risk-grid {
+      display: grid;
+      gap: 12px;
+    }
 
-  /* ALERTS */
-  .alerts-list { display: flex; flex-direction: column; gap: 8px; }
-  .alert-card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .alert-info { flex: 1; }
-  .alert-coin { font-size: 14px; font-weight: 700; }
-  .alert-condition { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .alert-price { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; text-align: right; }
-  .alert-active { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    .hero-grid {
+      grid-template-columns: 1.45fr 1fr;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
 
-  /* LOADING */
-  .loading {
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; padding: 40px;
-    color: var(--muted); gap: 12px;
-  }
-  .spinner {
-    width: 32px; height: 32px; border: 2px solid var(--border);
-    border-top-color: var(--accent); border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+    .hero-copy,
+    .panel,
+    .hero-side {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
 
-  /* MODAL */
-  .modal-overlay {
-    display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.8); backdrop-filter: blur(4px);
-    z-index: 200; align-items: flex-end;
-  }
-  .modal-overlay.open { display: flex; }
-  .modal {
-    background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 20px 20px 0 0; padding: 20px;
-    width: 100%; max-height: 60vh; overflow-y: auto;
-  }
-  .modal-handle { width: 40px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 16px; }
+    .hero-copy {
+      padding: 20px;
+    }
 
-  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
-  .empty-icon { font-size: 40px; margin-bottom: 12px; }
-  .empty-text { font-size: 14px; }
+    .hero-copy h1 {
+      font-size: clamp(28px, 5vw, 48px);
+      line-height: 0.95;
+      margin-bottom: 10px;
+    }
 
-  .section-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; margin-top: 4px; }
+    .hero-copy p {
+      max-width: 620px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 15px;
+      margin-bottom: 18px;
+    }
 
-  .toast {
-    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-    background: var(--accent); color: #000; font-weight: 700; font-size: 13px;
-    padding: 10px 20px; border-radius: 20px; z-index: 300;
-    animation: toastIn 0.3s ease; display: none;
-  }
-  @keyframes toastIn { from { opacity:0; transform: translateX(-50%) translateY(10px); } }
+    .hero-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
 
-  canvas { width: 100% !important; }
-</style>
+    .hero-side {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .hero-side h3,
+    .section-head h2 {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .hero-side p,
+    .section-head p,
+    .subtle-text {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .stats-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+
+    .stat {
+      background: rgba(8, 16, 25, 0.9);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 100px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.05;
+      margin-bottom: 4px;
+    }
+
+    .stat-foot {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+      scrollbar-width: none;
+    }
+
+    .chip-row::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(8, 16, 25, 0.76);
+      color: var(--muted);
+      padding: 8px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 13px;
+      transition: 0.2s ease;
+    }
+
+    .chip.active {
+      color: var(--text);
+      border-color: rgba(83, 197, 255, 0.45);
+      background: rgba(83, 197, 255, 0.16);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) 200px 150px;
+      gap: 10px;
+      margin: 16px 0 18px;
+    }
+
+    .input,
+    .select {
+      width: 100%;
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(8, 16, 25, 0.82);
+      padding: 0 14px;
+      outline: none;
+    }
+
+    .input:focus,
+    .select:focus {
+      border-color: rgba(83, 197, 255, 0.44);
+    }
+
+    .market-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .coin-card,
+    .news-card,
+    .watch-card,
+    .risk-card,
+    .detail-surface {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8, 16, 25, 0.88);
+    }
+
+    .coin-card {
+      padding: 14px;
+      cursor: pointer;
+      transition: 0.2s ease;
+    }
+
+    .coin-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--line-strong);
+    }
+
+    .coin-top {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .coin-left {
+      min-width: 0;
+    }
+
+    .coin-symbol-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+
+    .coin-symbol {
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .coin-rank,
+    .mini-badge,
+    .signal-tag {
+      font-size: 11px;
+      border-radius: 999px;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+
+    .coin-rank,
+    .mini-badge {
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .signal-tag.buy {
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .signal-tag.sell {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .signal-tag.wait {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .coin-name {
+      color: var(--muted);
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .coin-price {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 18px;
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .coin-change {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+      margin-top: 4px;
+      text-align: right;
+    }
+
+    .up {
+      color: var(--green);
+    }
+
+    .down {
+      color: var(--red);
+    }
+
+    .flat {
+      color: var(--amber);
+    }
+
+    .coin-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .metric {
+      min-width: 0;
+    }
+
+    .metric span {
+      display: block;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .metric-value {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .coin-foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      cursor: pointer;
+    }
+
+    .icon-btn.active {
+      background: var(--blue-soft);
+      border-color: rgba(83, 197, 255, 0.44);
+    }
+
+    .screener-grid {
+      grid-template-columns: 280px minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .filter-panel,
+    .result-panel,
+    .news-card,
+    .watch-card,
+    .risk-card,
+    .detail-surface {
+      padding: 16px;
+    }
+
+    .filter-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .filter-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .helper {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .result-panel {
+      min-height: 520px;
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .risk-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .risk-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .risk-card h3 {
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+
+    .risk-card p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .risk-line {
+      display: grid;
+      gap: 4px;
+      padding: 10px 0;
+      border-top: 1px solid rgba(130, 160, 190, 0.12);
+    }
+
+    .risk-line:first-child {
+      border-top: none;
+      padding-top: 0;
+    }
+
+    .risk-line strong {
+      font-size: 14px;
+    }
+
+    .risk-line small {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .news-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .news-card {
+      display: grid;
+      gap: 10px;
+      min-height: 200px;
+    }
+
+    .news-source {
+      color: var(--blue);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .news-title {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .news-desc {
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .news-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: auto;
+    }
+
+    .watch-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .form-stack {
+      display: grid;
+      gap: 10px;
+      margin: 12px 0 16px;
+    }
+
+    .watch-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .watch-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 0;
+      border-top: 1px solid rgba(130, 160, 190, 0.12);
+    }
+
+    .watch-row:first-child {
+      border-top: none;
+      padding-top: 0;
+    }
+
+    .watch-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .watch-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .detail-shell {
+      display: grid;
+      gap: 14px;
+    }
+
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      border: none;
+      background: none;
+      color: var(--blue);
+      cursor: pointer;
+      margin-bottom: 2px;
+    }
+
+    .detail-hero {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 14px;
+    }
+
+    .detail-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .detail-avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      object-fit: cover;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .detail-price {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: clamp(26px, 4vw, 38px);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .detail-change-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .change-pill {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+    }
+
+    .change-pill.up {
+      background: var(--green-soft);
+    }
+
+    .change-pill.down {
+      background: var(--red-soft);
+    }
+
+    .change-pill.flat {
+      background: var(--amber-soft);
+    }
+
+    .detail-grid {
+      grid-template-columns: 1.3fr 0.7fr;
+      align-items: start;
+    }
+
+    .chart-panel canvas {
+      width: 100%;
+      height: 320px;
+      max-height: 320px;
+    }
+
+    .period-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .period-btn {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
+      height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    .period-btn.active {
+      border-color: rgba(102, 247, 167, 0.42);
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .signal-panel {
+      display: grid;
+      gap: 14px;
+    }
+
+    .signal-box {
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .signal-box.buy {
+      border-color: rgba(102, 247, 167, 0.35);
+      background: rgba(102, 247, 167, 0.08);
+    }
+
+    .signal-box.sell {
+      border-color: rgba(255, 111, 127, 0.35);
+      background: rgba(255, 111, 127, 0.08);
+    }
+
+    .signal-box.wait {
+      border-color: rgba(255, 209, 102, 0.32);
+      background: rgba(255, 209, 102, 0.08);
+    }
+
+    .signal-score {
+      font-size: 30px;
+      font-weight: 700;
+      margin-top: 8px;
+    }
+
+    .entry-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .entry-item {
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(130, 160, 190, 0.12);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .entry-item small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      letter-spacing: 0.06em;
+    }
+
+    .entry-item strong {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 14px;
+    }
+
+    .detail-band {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .detail-stat {
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .detail-stat small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .detail-stat strong {
+      display: block;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 16px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .detail-notes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .note-list {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin-top: 12px;
+    }
+
+    .note-pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border: 1px solid rgba(255, 111, 127, 0.22);
+      color: var(--red);
+      background: rgba(255, 111, 127, 0.08);
+      margin: 4px 8px 0 0;
+    }
+
+    .empty,
+    .loading {
+      border: 1px dashed rgba(130, 160, 190, 0.24);
+      border-radius: 8px;
+      padding: 18px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      padding: 12px 16px;
+      background: rgba(8, 16, 25, 0.96);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 30;
+    }
+
+    @media (max-width: 1080px) {
+      .hero-grid,
+      .screener-grid,
+      .detail-grid,
+      .detail-hero,
+      .detail-notes {
+        grid-template-columns: 1fr;
+      }
+
+      .market-grid,
+      .news-grid,
+      .watch-grid,
+      .risk-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stats-grid,
+      .detail-band {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .result-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app-shell {
+        padding: 14px 10px 36px;
+      }
+
+      .topbar {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      .topbar-side {
+        justify-content: start;
+      }
+
+      .stats-grid,
+      .detail-band,
+      .coin-metrics,
+      .entry-grid,
+      .filter-row {
+        grid-template-columns: 1fr;
+      }
+
+      .coin-top,
+      .coin-foot,
+      .section-head,
+      .news-meta {
+        flex-direction: column;
+        align-items: start;
+      }
+
+      .coin-price,
+      .coin-change {
+        text-align: left;
+      }
+    }
+  </style>
 </head>
 <body>
-
-<div class="header">
-  <div class="logo">
-    <div class="logo-dot"></div>
-    <div class="logo-text">Crypto<span>Signal</span></div>
-  </div>
-  <div id="fearBadge" class="fear-badge" style="border-color:var(--muted);color:var(--muted)">— F&G</div>
-</div>
-
-<div class="tabs">
-  <button class="tab active" onclick="showTab('market')"><span class="tab-icon">📊</span>Рынок</button>
-  <button class="tab" onclick="showTab('signals')"><span class="tab-icon">🎯</span>Сигналы</button>
-  <button class="tab" onclick="showTab('portfolio')"><span class="tab-icon">💼</span>Портфолио</button>
-  <button class="tab" onclick="showTab('alerts')"><span class="tab-icon">🔔</span>Алерты</button>
-</div>
-
-<!-- MARKET -->
-<div id="page-market" class="page active">
-  <div class="market-stats" id="marketStats">
-    <div class="stat-card"><div class="stat-label">BTC Dom</div><div class="stat-value" id="btcDom">—</div></div>
-    <div class="stat-card"><div class="stat-label">Top Gainer</div><div class="stat-value up" id="topGainer">—</div></div>
-    <div class="stat-card"><div class="stat-label">Top Loser</div><div class="stat-value down" id="topLoser">—</div></div>
-  </div>
-
-  <div class="search-row">
-    <input class="search-input" id="searchInput" placeholder="🔍 Поиск монеты..." oninput="filterCoins()">
-  </div>
-
-  <div class="filter-pills">
-    <button class="pill active" onclick="setFilter('all', this)">Все</button>
-    <button class="pill" onclick="setFilter('buy', this)">🟢 Купить</button>
-    <button class="pill" onclick="setFilter('wait', this)">🟡 Ждать</button>
-    <button class="pill" onclick="setFilter('sell', this)">🔴 Продать</button>
-    <button class="pill" onclick="setFilter('overbought', this)">🔥 Перекуп</button>
-    <button class="pill" onclick="setFilter('new', this)">🆕 Новые</button>
-  </div>
-
-  <div id="coinsList" class="coins-list">
-    <div class="loading"><div class="spinner"></div><div>Загрузка рынка...</div></div>
-  </div>
-</div>
-
-<!-- COIN DETAIL -->
-<div id="page-coin" class="page">
-  <button class="back-btn" onclick="showTab('market')">← Назад</button>
-  <div id="coinDetail"></div>
-</div>
-
-<!-- SIGNALS -->
-<div id="page-signals" class="page">
-  <div class="section-title">Сигналы в реальном времени</div>
-  <div id="signalsList" class="signals-list">
-    <div class="loading"><div class="spinner"></div><div>Анализирую рынок...</div></div>
-  </div>
-</div>
-
-<!-- PORTFOLIO -->
-<div id="page-portfolio" class="page">
-  <div class="portfolio-summary">
-    <div class="portfolio-label">Стоимость портфолио</div>
-    <div class="portfolio-total" id="portfolioTotal">$0.00</div>
-    <div class="portfolio-change-big" id="portfolioPnl">— PnL</div>
-  </div>
-
-  <div class="add-coin-form">
-    <div class="form-title">➕ Добавить монету</div>
-    <div class="form-row">
-      <input class="form-input" id="portSymbol" placeholder="Символ (BTC)" style="text-transform:uppercase">
-      <input class="form-input" id="portAmount" placeholder="Кол-во" type="number">
-      <input class="form-input" id="portBuyPrice" placeholder="Цена входа" type="number">
-    </div>
-    <button class="add-btn" onclick="addToPortfolio()" style="width:100%">Добавить</button>
-  </div>
-
-  <div class="section-title">Мои монеты</div>
-  <div id="portfolioCoins" class="portfolio-coins">
-    <div class="empty-state"><div class="empty-icon">💼</div><div class="empty-text">Портфолио пустое</div></div>
-  </div>
-</div>
-
-<!-- ALERTS -->
-<div id="page-alerts" class="page">
-  <div class="add-coin-form">
-    <div class="form-title">🔔 Новый алерт</div>
-    <div class="form-row">
-      <input class="form-input" id="alertSymbol" placeholder="Монета (ETH)" style="text-transform:uppercase">
-      <select class="form-input" id="alertType" style="cursor:pointer">
-        <option value="above">Выше</option>
-        <option value="below">Ниже</option>
-      </select>
-      <input class="form-input" id="alertPrice" placeholder="Цена $" type="number">
-    </div>
-    <button class="add-btn" onclick="addAlert()" style="width:100%">Создать алерт</button>
-  </div>
-
-  <div class="section-title">Активные алерты</div>
-  <div id="alertsList" class="alerts-list">
-    <div class="empty-state"><div class="empty-icon">🔕</div><div class="empty-text">Нет алертов</div></div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-// ==================== STATE ====================
-let allCoins = [];
-let currentFilter = 'all';
-let portfolio = JSON.parse(localStorage.getItem('portfolio') || '[]');
-let alerts = JSON.parse(localStorage.getItem('alerts') || '[]');
-let currentCoin = null;
-let priceChart = null;
-let rsiChart = null;
-let currentPeriod = '7';
-
-// ==================== UTILS ====================
-function fmt(n) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  if (n >= 1e12) return '$' + (n/1e12).toFixed(2) + 'T';
-  if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en', {minimumFractionDigits:2,maximumFractionDigits:2});
-  if (n >= 1) return '$' + n.toFixed(4);
-  return '$' + n.toFixed(8);
-}
-
-function fmtPct(n) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
-}
-
-function calcRSI(prices) {
-  if (prices.length < 15) return 50;
-  const changes = [];
-  for (let i = 1; i < prices.length; i++) changes.push(prices[i] - prices[i-1]);
-  const period = 14;
-  let gains = 0, losses = 0;
-  for (let i = 0; i < period; i++) {
-    if (changes[i] > 0) gains += changes[i];
-    else losses += Math.abs(changes[i]);
-  }
-  let avgGain = gains / period, avgLoss = losses / period;
-  for (let i = period; i < changes.length; i++) {
-    const g = changes[i] > 0 ? changes[i] : 0;
-    const l = changes[i] < 0 ? Math.abs(changes[i]) : 0;
-    avgGain = (avgGain * 13 + g) / 14;
-    avgLoss = (avgLoss * 13 + l) / 14;
-  }
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return Math.round(100 - 100 / (1 + rs));
-}
-
-function getSignal(rsi, change24h, change7d) {
-  if (rsi > 75) return { type: 'sell', label: '🔴 Продать', cls: 'sig-sell', score: Math.round(20 - (rsi-75)*0.5) };
-  if (rsi < 30) return { type: 'buy', label: '🟢 Купить', cls: 'sig-buy', score: Math.round(70 + (30-rsi)*1.5) };
-  if (rsi < 45 && change24h > 0) return { type: 'buy', label: '🟢 Покупать', cls: 'sig-buy', score: 65 };
-  if (rsi > 65 && change24h < 0) return { type: 'sell', label: '🔴 Продавать', cls: 'sig-sell', score: 30 };
-  return { type: 'wait', label: '🟡 Ждать', cls: 'sig-wait', score: 50 };
-}
-
-function coinEmoji(symbol) {
-  const map = {BTC:'₿',ETH:'Ξ',SOL:'◎',BNB:'⬡',XRP:'✕',ADA:'₳',DOGE:'Ð',
-    SHIB:'🐕',AVAX:'🔺',DOT:'●',MATIC:'🔷',LINK:'⬡',UNI:'🦄',
-    ATOM:'⚛',LTC:'Ł',TRX:'⚡',TON:'💎',SUI:'💧',APT:'🔷',OP:'🔴',
-    ARB:'🔵',PEPE:'🐸',WIF:'🐕',BONK:'🐶',JUP:'🪐',INJ:'💉',
-    NEAR:'🌈',FIL:'📁',SAND:'🏖',MANA:'🌐',RENDER:'🖥',FET:'🤖',
-    TAO:'🧠',WLD:'🌍',TRUMP:'🎩',FLOKI:'⚡',PENGU:'🐧'};
-  return map[symbol] || symbol.charAt(0);
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.style.display = 'block';
-  setTimeout(() => t.style.display = 'none', 2500);
-}
-
-// ==================== TABS ====================
-function showTab(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  const tabs = ['market','signals','portfolio','alerts'];
-  const idx = tabs.indexOf(name);
-  if (idx >= 0) document.querySelectorAll('.tab')[idx].classList.add('active');
-  if (name === 'signals') renderSignals();
-  if (name === 'portfolio') renderPortfolio();
-  if (name === 'alerts') renderAlerts();
-}
-
-// ==================== MARKET DATA ====================
-async function fetchMarket() {
-  try {
-    const r = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=1h,24h,7d');
-    if (!r.ok) throw new Error();
-    const data = await r.json();
-    allCoins = data.map(c => ({
-      id: c.id,
-      symbol: c.symbol.toUpperCase(),
-      name: c.name,
-      price: c.current_price,
-      change1h: c.price_change_percentage_1h_in_currency,
-      change24h: c.price_change_percentage_24h,
-      change7d: c.price_change_percentage_7d_in_currency,
-      mcap: c.market_cap,
-      vol: c.total_volume,
-      rank: c.market_cap_rank,
-      ath: c.ath,
-      rsi: null
-    }));
-
-    // Calc RSI from 7d change proxy
-    allCoins.forEach(c => {
-      const r7 = c.change7d || 0;
-      const r24 = c.change24h || 0;
-      // Approximate RSI
-      const proxy = 50 + (r7 * 0.8) + (r24 * 0.5);
-      c.rsi = Math.max(5, Math.min(95, Math.round(proxy)));
-    });
-
-    // Stats
-    const gainers = [...allCoins].sort((a,b)=>(b.change24h||0)-(a.change24h||0));
-    document.getElementById('topGainer').textContent = gainers[0] ? gainers[0].symbol + ' ' + fmtPct(gainers[0].change24h) : '—';
-    document.getElementById('topLoser').textContent = gainers[gainers.length-1] ? gainers[gainers.length-1].symbol + ' ' + fmtPct(gainers[gainers.length-1].change24h) : '—';
-
-    renderCoins();
-    fetchFearGreed();
-    checkAlerts();
-  } catch(e) {
-    document.getElementById('coinsList').innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">Ошибка загрузки. Попробуй позже.</div></div>';
-  }
-}
-
-async function fetchFearGreed() {
-  try {
-    const r = await fetch('https://api.alternative.me/fng/?limit=1');
-    const d = await r.json();
-    const val = parseInt(d.data[0].value);
-    const cls = d.data[0].value_classification;
-    const badge = document.getElementById('fearBadge');
-    badge.textContent = val + ' ' + cls.split(' ').map(w=>w[0]).join('');
-    if (val < 30) { badge.style.borderColor='var(--red)'; badge.style.color='var(--red)'; }
-    else if (val < 50) { badge.style.borderColor='var(--yellow)'; badge.style.color='var(--yellow)'; }
-    else { badge.style.borderColor='var(--accent)'; badge.style.color='var(--accent)'; }
-    document.getElementById('btcDom').textContent = val + ' F&G';
-  } catch(e) {}
-}
-
-// ==================== RENDER COINS ====================
-function setFilter(f, btn) {
-  currentFilter = f;
-  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  renderCoins();
-}
-
-function filterCoins() { renderCoins(); }
-
-function renderCoins() {
-  const q = document.getElementById('searchInput').value.toLowerCase();
-  let coins = allCoins.filter(c => {
-    if (q && !c.symbol.toLowerCase().includes(q) && !c.name.toLowerCase().includes(q)) return false;
-    const sig = getSignal(c.rsi, c.change24h, c.change7d);
-    if (currentFilter === 'buy' && sig.type !== 'buy') return false;
-    if (currentFilter === 'sell' && sig.type !== 'sell') return false;
-    if (currentFilter === 'wait' && sig.type !== 'wait') return false;
-    if (currentFilter === 'overbought' && c.rsi < 65) return false;
-    if (currentFilter === 'new' && c.rank > 30) return false;
-    return true;
-  });
-
-  if (!coins.length) {
-    document.getElementById('coinsList').innerHTML = '<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-text">Ничего не найдено</div></div>';
-    return;
-  }
-
-  document.getElementById('coinsList').innerHTML = coins.map(c => {
-    const sig = getSignal(c.rsi, c.change24h, c.change7d);
-    const up = (c.change24h || 0) >= 0;
-    return `<div class="coin-row ${sig.type === 'buy' ? 'bull' : sig.type === 'sell' ? 'bear' : 'neutral'}" onclick="showCoin('${c.id}')">
-      <div class="coin-rank">#${c.rank}</div>
-      <div class="coin-icon">${coinEmoji(c.symbol)}</div>
-      <div class="coin-info">
-        <div class="coin-name">${c.symbol}</div>
-        <div class="coin-sym">${c.name}</div>
-        <div class="coin-rsi">RSI ${c.rsi}</div>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-kicker"><span class="brand-dot"></span> Crypto research cockpit</div>
+        <div class="brand-title">Crypto Radar</div>
       </div>
-      <div class="coin-right">
-        <div class="coin-price">${fmt(c.price)}</div>
-        <div class="coin-change ${up ? 'up' : 'down'}">${fmtPct(c.change24h)}</div>
-        <div style="margin-top:4px"><span class="signal-badge ${sig.cls}">${sig.label}</span></div>
+      <div class="topbar-side">
+        <div class="badge" id="updatedBadge">Обновление...</div>
+        <div class="badge" id="fearBadge">F&G <strong>--</strong></div>
+        <button class="ghost-btn" type="button" onclick="refreshAll()">Обновить</button>
       </div>
-    </div>`;
-  }).join('');
-}
+    </header>
 
-// ==================== COIN DETAIL ====================
-async function showCoin(id) {
-  currentCoin = id;
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById('page-coin').classList.add('active');
-  document.getElementById('coinDetail').innerHTML = '<div class="loading"><div class="spinner"></div><div>Загружаю анализ...</div></div>';
+    <nav class="tabbar">
+      <button class="tab active" data-tab="pulse" onclick="setTab('pulse')">📡 Pulse</button>
+      <button class="tab" data-tab="screener" onclick="setTab('screener')">🧰 Screener</button>
+      <button class="tab" data-tab="risk" onclick="setTab('risk')">🧨 Risk radar</button>
+      <button class="tab" data-tab="news" onclick="setTab('news')">📰 News</button>
+      <button class="tab" data-tab="watch" onclick="setTab('watch')">🔔 Watch</button>
+    </nav>
 
-  try {
-    const [coin, hist] = await Promise.all([
-      fetch(`https://api.coingecko.com/api/v3/coins/${id}?localization=false&tickers=false&community_data=false&developer_data=false`).then(r=>r.json()),
-      fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=7`).then(r=>r.json())
-    ]);
-
-    const prices = hist.prices.map(p => p[1]);
-    const rsi = calcRSI(prices);
-    const price = coin.market_data.current_price.usd;
-    const ch24 = coin.market_data.price_change_percentage_24h;
-    const ch7 = coin.market_data.price_change_percentage_7d;
-    const ch30 = coin.market_data.price_change_percentage_30d;
-    const mcap = coin.market_data.market_cap.usd;
-    const vol = coin.market_data.total_volume.usd;
-    const ath = coin.market_data.ath.usd;
-    const athPct = ((price - ath) / ath * 100).toFixed(1);
-
-    const sig = getSignal(rsi, ch24, ch7);
-    const entry = price;
-    const sl = +(price * (sig.type === 'buy' ? 0.94 : 1.06)).toFixed(6);
-    const tp1 = +(price * (sig.type === 'buy' ? 1.05 : 0.95)).toFixed(6);
-    const tp2 = +(price * (sig.type === 'buy' ? 1.12 : 0.88)).toFixed(6);
-    const tp3 = +(price * (sig.type === 'buy' ? 1.20 : 0.80)).toFixed(6);
-
-    const rsiColor = rsi > 70 ? 'var(--red)' : rsi < 30 ? 'var(--accent)' : 'var(--yellow)';
-    const rsiLabel = rsi > 70 ? 'Перекуплен' : rsi < 30 ? 'Перепродан' : 'Нейтрально';
-
-    const sigColor = sig.type === 'buy' ? 'var(--accent)' : sig.type === 'sell' ? 'var(--red)' : 'var(--yellow)';
-    const sigText = sig.type === 'buy'
-      ? 'Хороший момент для входа. RSI показывает потенциал роста.'
-      : sig.type === 'sell'
-      ? 'Монета перекуплена. Лучше дождаться коррекции.'
-      : 'Рынок в нейтральной зоне. Следи за объёмом.';
-
-    document.getElementById('coinDetail').innerHTML = `
-      <div class="coin-header-detail">
-        <div class="coin-header-top">
-          <div class="coin-big-icon">${coinEmoji(coin.symbol.toUpperCase())}</div>
+    <section class="page active" id="page-pulse">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <h1>Рынок, фильтры и риск fresh-cap в одном экране.</h1>
+          <p>Показываю широкий срез по рынку, свежие монеты с большой капитализацией, признаки распределения, новости и быстрый доступ к деталям по графику и сетапу.</p>
+          <div class="hero-meta" id="trendingRow"></div>
+        </div>
+        <div class="hero-side">
           <div>
-            <div class="coin-big-name">${coin.symbol.toUpperCase()}</div>
-            <div class="coin-big-sym">${coin.name}</div>
+            <h3>Что внутри</h3>
+            <p>Wide market coverage, фильтры по капитализации, Vol/Cap, RSI, risk score и fresh score. Всё завязано на встроенный API, так что Railway держит и бота, и сайт вместе.</p>
           </div>
-          <div style="margin-left:auto;text-align:right">
-            <span class="signal-badge ${sig.cls}" style="font-size:12px;padding:4px 12px">${sig.label}</span>
-          </div>
-        </div>
-        <div class="coin-big-price">${fmt(price)}</div>
-        <div class="coin-changes">
-          <span class="change-pill ${ch24>=0?'up':'down'}" style="background:${ch24>=0?'rgba(0,245,160,0.1)':'rgba(255,59,107,0.1)'}">${fmtPct(ch24)} 24ч</span>
-          <span class="change-pill ${ch7>=0?'up':'down'}" style="background:${ch7>=0?'rgba(0,245,160,0.1)':'rgba(255,59,107,0.1)'}">${fmtPct(ch7)} 7д</span>
-          <span class="change-pill ${ch30>=0?'up':'down'}" style="background:${ch30>=0?'rgba(0,245,160,0.1)':'rgba(255,59,107,0.1)'}">${fmtPct(ch30)} 30д</span>
+          <div class="subtle-text" id="coverageText">Жду данные по рынку...</div>
         </div>
       </div>
 
-      <div class="chart-container">
-        <div class="chart-header">
-          <div class="chart-title">📈 График цены</div>
-          <div class="chart-periods">
-            <button class="period-btn" onclick="changePeriod('1','${id}')">1д</button>
-            <button class="period-btn active" onclick="changePeriod('7','${id}')">7д</button>
-            <button class="period-btn" onclick="changePeriod('30','${id}')">30д</button>
-            <button class="period-btn" onclick="changePeriod('90','${id}')">90д</button>
-          </div>
-        </div>
-        <canvas id="priceChart" height="160"></canvas>
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat"><div class="stat-label">Total Market Cap</div><div class="stat-value">--</div><div class="stat-foot">жду данные</div></div>
+        <div class="stat"><div class="stat-label">24h Volume</div><div class="stat-value">--</div><div class="stat-foot">жду данные</div></div>
+        <div class="stat"><div class="stat-label">BTC Dominance</div><div class="stat-value">--</div><div class="stat-foot">жду данные</div></div>
+        <div class="stat"><div class="stat-label">Tracked Coins</div><div class="stat-value">--</div><div class="stat-foot">жду данные</div></div>
       </div>
 
-      <div class="rsi-bar-wrap">
-        <div class="rsi-bar-label">RSI (14) — ${rsiLabel}</div>
-        <div class="rsi-track">
-          <div class="rsi-fill" style="width:${rsi}%;background:${rsiColor}"></div>
-          <div class="rsi-thumb" style="left:${rsi}%;color:${rsiColor};background:${rsiColor}"></div>
-        </div>
-        <div class="rsi-zones">
-          <span class="rsi-zone-label up">0 — Перепродан</span>
-          <span class="rsi-zone-label" style="color:${rsiColor};font-weight:700">RSI: ${rsi}</span>
-          <span class="rsi-zone-label down">Перекуплен — 100</span>
+      <div class="section-head">
+        <div>
+          <h2>Market pulse</h2>
+          <p>Поиск по рынку, короткие сигналы и быстрый заход в детальный экран.</p>
         </div>
       </div>
 
-      <div class="signal-box ${sig.type}">
-        <div class="signal-header">
-          <div>
-            <div class="signal-title" style="color:${sigColor}">${sig.type === 'buy' ? '🟢 СИГНАЛ: ПОКУПАТЬ' : sig.type === 'sell' ? '🔴 СИГНАЛ: ПРОДАВАТЬ' : '🟡 ЖДАТЬ'}</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:4px">${sigText}</div>
-          </div>
-          <div class="signal-score" style="color:${sigColor}">${sig.score}</div>
-        </div>
-        <div class="entry-grid">
-          <div class="entry-item">
-            <div class="entry-label">🎯 Вход</div>
-            <div class="entry-value">${fmt(entry)}</div>
-          </div>
-          <div class="entry-item">
-            <div class="entry-label">🛑 Стоп-лосс</div>
-            <div class="entry-value down">${fmt(sl)}</div>
-          </div>
-          <div class="entry-item">
-            <div class="entry-label">✅ TP1 +${sig.type==='buy'?'5':'5'}%</div>
-            <div class="entry-value up">${fmt(tp1)}</div>
-          </div>
-          <div class="entry-item">
-            <div class="entry-label">✅ TP2 +${sig.type==='buy'?'12':'12'}%</div>
-            <div class="entry-value up">${fmt(tp2)}</div>
-          </div>
-          <div class="entry-item">
-            <div class="entry-label">✅ TP3 +${sig.type==='buy'?'20':'20'}%</div>
-            <div class="entry-value up">${fmt(tp3)}</div>
-          </div>
-          <div class="entry-item">
-            <div class="entry-label">📉 От ATH</div>
-            <div class="entry-value ${+athPct<0?'down':'up'}">${athPct}%</div>
-          </div>
+      <div class="chip-row" id="pulseFilterRow">
+        <button class="chip active" data-pulse-filter="all" onclick="setPulseFilter('all', this)">Все</button>
+        <button class="chip" data-pulse-filter="buy" onclick="setPulseFilter('buy', this)">🟢 Buy</button>
+        <button class="chip" data-pulse-filter="fresh" onclick="setPulseFilter('fresh', this)">🚀 Fresh</button>
+        <button class="chip" data-pulse-filter="risk" onclick="setPulseFilter('risk', this)">🧨 Risk</button>
+        <button class="chip" data-pulse-filter="sell" onclick="setPulseFilter('sell', this)">🔴 Sell</button>
+      </div>
+
+      <div class="toolbar">
+        <input id="marketSearch" class="input" type="text" placeholder="Поиск по тикеру или названию" oninput="renderPulse()">
+        <select id="pulseSort" class="select" onchange="renderPulse()">
+          <option value="market_cap">По капитализации</option>
+          <option value="signal_score">По сигналу</option>
+          <option value="fresh_score">По fresh score</option>
+          <option value="risk_score">По risk score</option>
+          <option value="change_24h">По 24ч импульсу</option>
+        </select>
+        <select id="pulseLimit" class="select" onchange="renderPulse()">
+          <option value="12">12 монет</option>
+          <option value="24">24 монеты</option>
+          <option value="36">36 монет</option>
+        </select>
+      </div>
+
+      <div class="market-grid" id="marketGrid">
+        <div class="loading">Подтягиваю рынок...</div>
+      </div>
+    </section>
+
+    <section class="page" id="page-screener">
+      <div class="section-head">
+        <div>
+          <h2>Custom screener</h2>
+          <p>Фильтруй монеты по капитализации, ликвидности, RSI, импульсу и risk/fresh оценке.</p>
         </div>
       </div>
 
-      <div class="indicators-grid">
-        <div class="ind-card">
-          <div class="ind-name">Объём 24ч</div>
-          <div class="ind-value" style="font-size:12px">${fmt(vol)}</div>
-          <div class="ind-status" style="color:var(--muted)">Vol/MCap: ${(vol/mcap*100).toFixed(1)}%</div>
+      <div class="screener-grid">
+        <div class="panel filter-panel">
+          <div class="filter-stack">
+            <select id="presetSelect" class="select">
+              <option value="smart">Smart mix</option>
+              <option value="fresh">Fresh-cap</option>
+              <option value="risk">Large-cap risk</option>
+              <option value="momentum">Momentum</option>
+              <option value="oversold">Oversold</option>
+            </select>
+            <div class="filter-row">
+              <input id="capMin" class="input" type="number" placeholder="Cap min" oninput="applyScreener()">
+              <input id="capMax" class="input" type="number" placeholder="Cap max" oninput="applyScreener()">
+            </div>
+            <div class="filter-row">
+              <input id="volRatioMin" class="input" type="number" step="0.01" placeholder="Vol/Cap min" oninput="applyScreener()">
+              <input id="volRatioMax" class="input" type="number" step="0.01" placeholder="Vol/Cap max" oninput="applyScreener()">
+            </div>
+            <div class="filter-row">
+              <input id="rsiMin" class="input" type="number" placeholder="RSI min" oninput="applyScreener()">
+              <input id="rsiMax" class="input" type="number" placeholder="RSI max" oninput="applyScreener()">
+            </div>
+            <div class="filter-row">
+              <input id="change24Min" class="input" type="number" step="0.1" placeholder="24ч min %" oninput="applyScreener()">
+              <input id="riskMax" class="input" type="number" placeholder="Risk max" oninput="applyScreener()">
+            </div>
+            <div class="filter-row">
+              <input id="freshMin" class="input" type="number" placeholder="Fresh min" oninput="applyScreener()">
+              <select id="screenerSort" class="select" onchange="applyScreener()">
+                <option value="signal_score">Sort: signal</option>
+                <option value="opportunity_score">Sort: opportunity</option>
+                <option value="fresh_score">Sort: fresh</option>
+                <option value="risk_score">Sort: risk</option>
+                <option value="vol_ratio">Sort: volume</option>
+              </select>
+            </div>
+            <button class="primary-btn" type="button" onclick="resetScreener()">Сбросить</button>
+            <div class="helper">Подсказка: для fresh-cap обычно хорошо работают `Cap min 50M`, `Vol/Cap min 0.08`, `Fresh min 4`, `Risk max 7`.</div>
+          </div>
         </div>
-        <div class="ind-card">
-          <div class="ind-name">Кап</div>
-          <div class="ind-value" style="font-size:12px">${fmt(mcap)}</div>
-          <div class="ind-status" style="color:var(--muted)">Ранг рынка</div>
-        </div>
-        <div class="ind-card">
-          <div class="ind-name">ATH</div>
-          <div class="ind-value" style="font-size:12px">${fmt(ath)}</div>
-          <div class="ind-status ${+athPct<0?'down':'up'}">${athPct}%</div>
+
+        <div class="panel result-panel">
+          <div class="section-head">
+            <div>
+              <h2>Результат</h2>
+              <p id="screenerSummary">Жду данные рынка...</p>
+            </div>
+          </div>
+          <div class="result-grid" id="screenerResults">
+            <div class="loading">Собираю universe...</div>
+          </div>
         </div>
       </div>
-    `;
+    </section>
 
-    drawPriceChart(hist.prices, price, sig.type);
+    <section class="page" id="page-risk">
+      <div class="section-head">
+        <div>
+          <h2>Risk radar</h2>
+          <p>Слева свежие монеты с крупной капитализацией под риск распределения, справа более широкий рынок под дамп-давление.</p>
+        </div>
+      </div>
+      <div class="risk-grid">
+        <div class="risk-card">
+          <h3>Fresh large-cap distribution</h3>
+          <p>Ищу новые монеты, где капа уже раздулась, а объем и структура предложения намекают на продажу в ликвидность.</p>
+          <div class="risk-list" id="listingRiskList">
+            <div class="loading">Считаю risk score...</div>
+          </div>
+        </div>
+        <div class="risk-card">
+          <h3>Dump pressure</h3>
+          <p>Здесь самые перегретые или слабые по потоку ликвидности и импульсу монеты.</p>
+          <div class="risk-list" id="dumpRiskList">
+            <div class="loading">Считаю risk score...</div>
+          </div>
+        </div>
+      </div>
+    </section>
 
-  } catch(e) {
-    document.getElementById('coinDetail').innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">Ошибка загрузки. Попробуй позже.</div></div>';
-  }
-}
+    <section class="page" id="page-news">
+      <div class="section-head">
+        <div>
+          <h2>Crypto news feed</h2>
+          <p>Лента подтягивается с серверной стороны, так что её можно безопасно отдавать и в Telegram WebApp.</p>
+        </div>
+      </div>
+      <div class="news-grid" id="newsGrid">
+        <div class="loading">Собираю новости...</div>
+      </div>
+    </section>
 
-function drawPriceChart(pricesRaw, currentPrice, sigType) {
-  const ctx = document.getElementById('priceChart');
-  if (!ctx) return;
-  if (priceChart) priceChart.destroy();
+    <section class="page" id="page-watch">
+      <div class="section-head">
+        <div>
+          <h2>Watch and alerts</h2>
+          <p>Локальный watchlist и простые ценовые алерты внутри web app.</p>
+        </div>
+      </div>
 
-  const labels = pricesRaw.map(p => {
-    const d = new Date(p[0]);
-    return d.getDate() + '.' + (d.getMonth()+1);
-  });
-  const data = pricesRaw.map(p => p[1]);
+      <div class="watch-grid">
+        <div class="watch-card">
+          <h3>Watchlist</h3>
+          <div class="form-stack">
+            <input id="watchInput" class="input" type="text" placeholder="Например BTC или SOL">
+            <button class="primary-btn" type="button" onclick="addWatch()">Добавить в watchlist</button>
+          </div>
+          <div class="watch-list" id="watchList"></div>
+        </div>
 
-  const color = sigType === 'buy' ? '#00f5a0' : sigType === 'sell' ? '#ff3b6b' : '#ffd60a';
+        <div class="watch-card">
+          <h3>Price alerts</h3>
+          <div class="form-stack">
+            <input id="alertSymbol" class="input" type="text" placeholder="Тикер">
+            <div class="filter-row">
+              <select id="alertDirection" class="select">
+                <option value="above">Выше цены</option>
+                <option value="below">Ниже цены</option>
+              </select>
+              <input id="alertPrice" class="input" type="number" placeholder="Цена">
+            </div>
+            <button class="primary-btn" type="button" onclick="addAlert()">Создать алерт</button>
+          </div>
+          <div class="watch-list" id="alertList"></div>
+        </div>
+      </div>
+    </section>
 
-  priceChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        data,
-        borderColor: color,
-        borderWidth: 2,
-        fill: true,
-        backgroundColor: (ctx) => {
-          const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 200);
-          g.addColorStop(0, color + '30');
-          g.addColorStop(1, color + '00');
-          return g;
-        },
-        pointRadius: 0,
-        tension: 0.4
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { display: false },
-        y: {
-          display: true,
-          grid: { color: '#1e2530' },
-          ticks: { color: '#5a6478', font: { family: 'Space Mono', size: 10 }, callback: v => fmt(v) }
-        }
-      },
-      animation: { duration: 500 }
+    <section class="page" id="page-coin">
+      <button class="back-btn" type="button" onclick="backFromCoin()">← Назад</button>
+      <div id="coinDetail" class="detail-shell">
+        <div class="loading">Готовлю детальный экран...</div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const state = {
+      tab: "pulse",
+      previousTab: "pulse",
+      pulseFilter: "all",
+      overview: null,
+      market: [],
+      news: [],
+      currentCoin: null,
+      chart: null,
+      watchlist: JSON.parse(localStorage.getItem("crypto_watchlist") || "[]"),
+      alerts: JSON.parse(localStorage.getItem("crypto_alerts") || "[]"),
+      latestToastKey: null
+    };
+
+    function fmtMoney(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+      const v = Number(value);
+      if (Math.abs(v) >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+      if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+      if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+      if (Math.abs(v) >= 1000) return `$${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+      if (Math.abs(v) >= 1) return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+      if (Math.abs(v) >= 0.01) return `$${v.toFixed(6)}`;
+      return `$${v.toFixed(8)}`;
     }
-  });
-}
 
-async function changePeriod(days, id) {
-  document.querySelectorAll('.period-btn').forEach(b => {
-    b.classList.toggle('active', b.textContent.replace('д','') === days || (days==='1' && b.textContent==='1д') || (days==='90' && b.textContent==='90д'));
-  });
-  try {
-    const r = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}`);
-    const hist = await r.json();
-    const coin = allCoins.find(c => c.id === id);
-    const sig = coin ? getSignal(coin.rsi, coin.change24h, coin.change7d) : {type:'wait'};
-    drawPriceChart(hist.prices, hist.prices[hist.prices.length-1][1], sig.type);
-  } catch(e){}
-}
+    function fmtPct(value) {
+      const v = Number(value || 0);
+      return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+    }
 
-// ==================== SIGNALS ====================
-function renderSignals() {
-  if (!allCoins.length) {
-    document.getElementById('signalsList').innerHTML = '<div class="loading"><div class="spinner"></div><div>Загружаю данные...</div></div>';
-    fetchMarket().then(renderSignals);
-    return;
-  }
+    function fmtAgo(iso) {
+      if (!iso) return "без времени";
+      const diff = Date.now() - new Date(iso).getTime();
+      const hours = Math.floor(diff / 3600000);
+      if (hours < 1) return "только что";
+      if (hours < 24) return `${hours}ч назад`;
+      const days = Math.floor(hours / 24);
+      return `${days}д назад`;
+    }
 
-  const buys = allCoins.filter(c => getSignal(c.rsi, c.change24h, c.change7d).type === 'buy').slice(0, 5);
-  const sells = allCoins.filter(c => getSignal(c.rsi, c.change24h, c.change7d).type === 'sell').slice(0, 5);
-  const top = [...buys.map(c=>({...c,sigType:'buy'})), ...sells.map(c=>({...c,sigType:'sell'}))];
+    function colorClass(value) {
+      const v = Number(value || 0);
+      if (v > 0) return "up";
+      if (v < 0) return "down";
+      return "flat";
+    }
 
-  document.getElementById('signalsList').innerHTML = `
-    <div class="section-title">🟢 Сигналы на покупку (${buys.length})</div>
-    ${buys.map(c => signalCard(c, 'buy')).join('')}
-    <div class="section-title" style="margin-top:12px">🔴 Сигналы на продажу (${sells.length})</div>
-    ${sells.map(c => signalCard(c, 'sell')).join('')}
-  `;
-}
+    function toast(message) {
+      const node = document.getElementById("toast");
+      node.textContent = message;
+      node.style.display = "block";
+      clearTimeout(node._timer);
+      node._timer = setTimeout(() => {
+        node.style.display = "none";
+      }, 2600);
+    }
 
-function signalCard(c, type) {
-  const sig = getSignal(c.rsi, c.change24h, c.change7d);
-  const color = type === 'buy' ? 'var(--accent)' : 'var(--red)';
-  const sl = type === 'buy' ? c.price * 0.94 : c.price * 1.06;
-  const tp = type === 'buy' ? c.price * 1.10 : c.price * 0.90;
-  return `<div class="signal-card" onclick="showCoin('${c.id}')">
-    <div class="signal-card-top">
-      <div class="signal-coin">${coinEmoji(c.symbol)} ${c.symbol}</div>
-      <span class="signal-type-big" style="background:${color}20;color:${color}">${type==='buy'?'🟢 КУПИТЬ':'🔴 ПРОДАТЬ'}</span>
-    </div>
-    <div style="font-family:'Space Mono',monospace;font-size:16px;font-weight:700">${fmt(c.price)}</div>
-    <div class="signal-details">
-      <div class="sig-detail"><div class="sig-detail-label">RSI</div><div class="sig-detail-val" style="color:${c.rsi<30?'var(--accent)':c.rsi>70?'var(--red)':'var(--yellow)'}">${c.rsi}</div></div>
-      <div class="sig-detail"><div class="sig-detail-label">Стоп</div><div class="sig-detail-val down">${fmt(sl)}</div></div>
-      <div class="sig-detail"><div class="sig-detail-label">Цель</div><div class="sig-detail-val up">${fmt(tp)}</div></div>
-    </div>
-  </div>`;
-}
+    function setTab(name) {
+      state.tab = name;
+      document.querySelectorAll(".page").forEach((node) => node.classList.remove("active"));
+      document.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
+      const page = document.getElementById(`page-${name}`);
+      if (page) page.classList.add("active");
+      const tab = document.querySelector(`.tab[data-tab="${name}"]`);
+      if (tab) tab.classList.add("active");
+      if (name === "screener") applyScreener();
+      if (name === "risk") renderRisk();
+      if (name === "news") renderNews();
+      if (name === "watch") renderWatch();
+    }
 
-// ==================== PORTFOLIO ====================
-async function addToPortfolio() {
-  const sym = document.getElementById('portSymbol').value.toUpperCase().trim();
-  const amount = parseFloat(document.getElementById('portAmount').value);
-  const buyPrice = parseFloat(document.getElementById('portBuyPrice').value);
+    function backFromCoin() {
+      setTab(state.previousTab || "pulse");
+    }
 
-  if (!sym || isNaN(amount) || isNaN(buyPrice)) { showToast('❌ Заполни все поля'); return; }
+    function setPulseFilter(filter, button) {
+      state.pulseFilter = filter;
+      document.querySelectorAll("#pulseFilterRow .chip").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+      renderPulse();
+    }
 
-  const coin = allCoins.find(c => c.symbol === sym);
-  if (!coin) { showToast('❌ Монета ' + sym + ' не найдена'); return; }
+    function findCoinBySymbol(symbol) {
+      return state.market.find((coin) => coin.symbol === symbol.toUpperCase());
+    }
 
-  portfolio.push({ id: coin.id, symbol: sym, name: coin.name, amount, buyPrice });
-  localStorage.setItem('portfolio', JSON.stringify(portfolio));
-  document.getElementById('portSymbol').value = '';
-  document.getElementById('portAmount').value = '';
-  document.getElementById('portBuyPrice').value = '';
-  showToast('✅ Добавлено в портфолио');
-  renderPortfolio();
-}
+    function marketCard(coin) {
+      const watchActive = state.watchlist.includes(coin.id);
+      return `
+        <article class="coin-card" onclick="openCoin('${coin.id}')">
+          <div class="coin-top">
+            <div class="coin-left">
+              <div class="coin-symbol-row">
+                <span class="coin-symbol">${coin.symbol}</span>
+                <span class="coin-rank">#${coin.rank || "--"}</span>
+                <span class="signal-tag ${coin.signal_type}">${coin.signal_label.replace(/^[^ ]+ /, "")}</span>
+              </div>
+              <div class="coin-name">${coin.name}</div>
+            </div>
+            <div>
+              <div class="coin-price">${fmtMoney(coin.price)}</div>
+              <div class="coin-change ${colorClass(coin.change_24h)}">${fmtPct(coin.change_24h)}</div>
+            </div>
+          </div>
+          <div class="coin-metrics">
+            <div class="metric">
+              <span class="metric-label">Cap</span>
+              <span class="metric-value">${fmtMoney(coin.market_cap)}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Vol/Cap</span>
+              <span class="metric-value">${(coin.vol_ratio * 100).toFixed(0)}%</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">RSI</span>
+              <span class="metric-value">${coin.rsi}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Fresh</span>
+              <span class="metric-value">${coin.fresh_score}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Risk</span>
+              <span class="metric-value">${coin.risk_score}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">7d</span>
+              <span class="metric-value ${colorClass(coin.change_7d)}">${fmtPct(coin.change_7d)}</span>
+            </div>
+          </div>
+          <div class="coin-foot">
+            <div>
+              <span class="mini-badge">signal ${coin.signal_score}</span>
+              <span class="mini-badge">FDV ${coin.fdv_ratio.toFixed(2)}x</span>
+            </div>
+            <button class="icon-btn ${watchActive ? "active" : ""}" type="button" title="Watchlist" onclick="event.stopPropagation();toggleWatch('${coin.id}')">☆</button>
+          </div>
+        </article>
+      `;
+    }
 
-function renderPortfolio() {
-  if (!portfolio.length) {
-    document.getElementById('portfolioCoins').innerHTML = '<div class="empty-state"><div class="empty-icon">💼</div><div class="empty-text">Добавь монеты в портфолио</div></div>';
-    document.getElementById('portfolioTotal').textContent = '$0.00';
-    document.getElementById('portfolioPnl').textContent = '— PnL';
-    return;
-  }
+    function getPulseCoins() {
+      let items = [...state.market];
+      const query = document.getElementById("marketSearch").value.trim().toLowerCase();
+      if (query) {
+        items = items.filter((coin) =>
+          coin.symbol.toLowerCase().includes(query) || coin.name.toLowerCase().includes(query)
+        );
+      }
 
-  let totalValue = 0, totalCost = 0;
-  const rows = portfolio.map((p, i) => {
-    const coin = allCoins.find(c => c.id === p.id);
-    const price = coin ? coin.price : p.buyPrice;
-    const value = price * p.amount;
-    const cost = p.buyPrice * p.amount;
-    const pnl = value - cost;
-    const pnlPct = ((value - cost) / cost * 100).toFixed(2);
-    totalValue += value; totalCost += cost;
-    return `<div class="portfolio-coin">
-      <div class="coin-icon">${coinEmoji(p.symbol)}</div>
-      <div class="port-coin-info">
-        <div class="port-coin-name">${p.symbol}</div>
-        <div class="port-coin-amount">${p.amount} × ${fmt(p.buyPrice)}</div>
-      </div>
-      <div class="port-coin-values">
-        <div class="port-coin-value">${fmt(value)}</div>
-        <div class="port-coin-pnl ${pnl>=0?'up':'down'}">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)} (${pnlPct}%)</div>
-      </div>
-      <button class="remove-btn" onclick="removePortfolio(${i})">✕</button>
-    </div>`;
-  });
+      if (state.pulseFilter === "buy") {
+        items = items.filter((coin) => coin.signal_type === "buy" && coin.risk_score < 8);
+      } else if (state.pulseFilter === "fresh") {
+        items = items.filter((coin) => coin.fresh_score >= 4 && coin.risk_score < 8);
+      } else if (state.pulseFilter === "risk") {
+        items = items.filter((coin) => coin.risk_score >= 6);
+      } else if (state.pulseFilter === "sell") {
+        items = items.filter((coin) => coin.signal_type === "sell" || coin.risk_score >= 8);
+      }
 
-  const pnl = totalValue - totalCost;
-  const pnlPct = totalCost > 0 ? ((pnl/totalCost)*100).toFixed(2) : '0.00';
-  document.getElementById('portfolioTotal').textContent = fmt(totalValue);
-  document.getElementById('portfolioPnl').innerHTML = `<span class="${pnl>=0?'up':'down'}">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)} (${pnlPct}%)</span>`;
-  document.getElementById('portfolioCoins').innerHTML = rows.join('');
-}
+      const sortKey = document.getElementById("pulseSort").value;
+      items.sort((a, b) => {
+        if (sortKey === "market_cap") return b.market_cap - a.market_cap;
+        return (b[sortKey] || 0) - (a[sortKey] || 0);
+      });
+      const limit = Number(document.getElementById("pulseLimit").value || 12);
+      return items.slice(0, limit);
+    }
 
-function removePortfolio(i) {
-  portfolio.splice(i, 1);
-  localStorage.setItem('portfolio', JSON.stringify(portfolio));
-  renderPortfolio();
-  showToast('Удалено из портфолио');
-}
+    function renderPulse() {
+      const grid = document.getElementById("marketGrid");
+      if (!state.market.length) {
+        grid.innerHTML = '<div class="loading">Подтягиваю рынок...</div>';
+        return;
+      }
+      const items = getPulseCoins();
+      if (!items.length) {
+        grid.innerHTML = '<div class="empty">По этим условиям ничего не найдено.</div>';
+        return;
+      }
+      grid.innerHTML = items.map(marketCard).join("");
+    }
 
-// ==================== ALERTS ====================
-function addAlert() {
-  const sym = document.getElementById('alertSymbol').value.toUpperCase().trim();
-  const type = document.getElementById('alertType').value;
-  const price = parseFloat(document.getElementById('alertPrice').value);
+    function applyPresetDefaults(preset) {
+      const defaults = {
+        smart: {},
+        fresh: { capMin: "50000000", capMax: "", volRatioMin: "0.08", volRatioMax: "", rsiMin: "", rsiMax: "68", change24Min: "", riskMax: "7", freshMin: "4", screenerSort: "opportunity_score" },
+        risk: { capMin: "50000000", capMax: "", volRatioMin: "0.12", volRatioMax: "", rsiMin: "", rsiMax: "", change24Min: "", riskMax: "", freshMin: "3", screenerSort: "risk_score" },
+        momentum: { capMin: "100000000", capMax: "", volRatioMin: "0.10", volRatioMax: "", rsiMin: "35", rsiMax: "72", change24Min: "3", riskMax: "8", freshMin: "", screenerSort: "signal_score" },
+        oversold: { capMin: "", capMax: "", volRatioMin: "0.04", volRatioMax: "", rsiMin: "", rsiMax: "35", change24Min: "-15", riskMax: "8", freshMin: "", screenerSort: "signal_score" }
+      };
 
-  if (!sym || isNaN(price)) { showToast('❌ Заполни все поля'); return; }
+      const map = defaults[preset] || defaults.smart;
+      Object.entries(map).forEach(([id, value]) => {
+        const node = document.getElementById(id);
+        if (node) node.value = value;
+      });
+    }
 
-  alerts.push({ symbol: sym, type, price });
-  localStorage.setItem('alerts', JSON.stringify(alerts));
-  document.getElementById('alertSymbol').value = '';
-  document.getElementById('alertPrice').value = '';
-  showToast('🔔 Алерт создан');
-  renderAlerts();
-}
+    function resetScreener() {
+      document.getElementById("presetSelect").value = "smart";
+      ["capMin", "capMax", "volRatioMin", "volRatioMax", "rsiMin", "rsiMax", "change24Min", "riskMax", "freshMin"].forEach((id) => {
+        document.getElementById(id).value = "";
+      });
+      document.getElementById("screenerSort").value = "signal_score";
+      applyScreener();
+    }
 
-function renderAlerts() {
-  if (!alerts.length) {
-    document.getElementById('alertsList').innerHTML = '<div class="empty-state"><div class="empty-icon">🔕</div><div class="empty-text">Нет активных алертов</div></div>';
-    return;
-  }
-  document.getElementById('alertsList').innerHTML = alerts.map((a, i) => {
-    const coin = allCoins.find(c => c.symbol === a.symbol);
-    const cur = coin ? coin.price : null;
-    const diff = cur ? ((a.price - cur) / cur * 100).toFixed(1) : null;
-    return `<div class="alert-card">
-      <div class="alert-active"></div>
-      <div class="alert-info">
-        <div class="alert-coin">${a.symbol}</div>
-        <div class="alert-condition">${a.type === 'above' ? '📈 Выше' : '📉 Ниже'} ${fmt(a.price)}</div>
-        ${cur ? `<div style="font-size:11px;color:var(--muted)">Сейчас ${fmt(cur)} · ${diff > 0 ? '+':''  }${diff}%</div>` : ''}
-      </div>
-      <button class="remove-btn" onclick="removeAlert(${i})">✕</button>
-    </div>`;
-  }).join('');
-}
+    function applyScreener(forcePresetRefresh = false) {
+      if (!state.market.length) return;
+      const preset = document.getElementById("presetSelect").value;
+      if (forcePresetRefresh) applyPresetDefaults(preset);
 
-function removeAlert(i) {
-  alerts.splice(i, 1);
-  localStorage.setItem('alerts', JSON.stringify(alerts));
-  renderAlerts();
-}
+      const capMin = Number(document.getElementById("capMin").value || 0);
+      const capMax = Number(document.getElementById("capMax").value || Infinity);
+      const volRatioMin = Number(document.getElementById("volRatioMin").value || 0);
+      const volRatioMax = Number(document.getElementById("volRatioMax").value || Infinity);
+      const rsiMin = Number(document.getElementById("rsiMin").value || 0);
+      const rsiMax = Number(document.getElementById("rsiMax").value || 100);
+      const change24Min = Number(document.getElementById("change24Min").value || -999);
+      const riskMax = Number(document.getElementById("riskMax").value || Infinity);
+      const freshMin = Number(document.getElementById("freshMin").value || 0);
+      const sortKey = document.getElementById("screenerSort").value;
 
-function checkAlerts() {
-  alerts.forEach(a => {
-    const coin = allCoins.find(c => c.symbol === a.symbol);
-    if (!coin) return;
-    if (a.type === 'above' && coin.price >= a.price) showToast('🔔 ' + a.symbol + ' достиг ' + fmt(a.price) + '!');
-    if (a.type === 'below' && coin.price <= a.price) showToast('🔔 ' + a.symbol + ' упал до ' + fmt(a.price) + '!');
-  });
-}
+      let items = state.market.filter((coin) => {
+        if (coin.market_cap < capMin || coin.market_cap > capMax) return false;
+        if (coin.vol_ratio < volRatioMin || coin.vol_ratio > volRatioMax) return false;
+        if (coin.rsi < rsiMin || coin.rsi > rsiMax) return false;
+        if (coin.change_24h < change24Min) return false;
+        if (coin.risk_score > riskMax) return false;
+        if (coin.fresh_score < freshMin) return false;
+        if (preset === "fresh" && coin.fresh_score < 4) return false;
+        if (preset === "risk" && coin.risk_score < 5) return false;
+        if (preset === "momentum" && (coin.change_7d < 8 || coin.signal_type === "sell")) return false;
+        if (preset === "oversold" && coin.rsi > 35) return false;
+        return true;
+      });
 
-// ==================== INIT ====================
-fetchMarket();
-setInterval(fetchMarket, 60000); // Обновление каждую минуту
-setInterval(renderPortfolio, 60000);
+      items.sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+      document.getElementById("screenerSummary").textContent = `Найдено ${items.length} монет из ${state.market.length} в текущем universe.`;
+      const target = document.getElementById("screenerResults");
+      if (!items.length) {
+        target.innerHTML = '<div class="empty">По этим фильтрам пусто. Ослабь условия и попробуй еще.</div>';
+        return;
+      }
+      target.innerHTML = items.slice(0, 18).map(marketCard).join("");
+    }
 
-// Telegram WebApp init
-if (window.Telegram && window.Telegram.WebApp) {
-  window.Telegram.WebApp.ready();
-  window.Telegram.WebApp.expand();
-}
-</script>
+    function renderRisk() {
+      if (!state.market.length) return;
+      const listingRisk = state.market
+        .filter((coin) => coin.market_cap >= 50000000 && coin.fresh_score >= 3 && coin.risk_score >= 5)
+        .sort((a, b) => (b.risk_score - a.risk_score) || (b.fdv_ratio - a.fdv_ratio))
+        .slice(0, 8);
+
+      const dumpRisk = state.market
+        .filter((coin) => coin.risk_score >= 6)
+        .sort((a, b) => (b.risk_score - a.risk_score) || (b.vol_ratio - a.vol_ratio))
+        .slice(0, 8);
+
+      document.getElementById("listingRiskList").innerHTML = listingRisk.length
+        ? listingRisk.map((coin) => `
+            <div class="risk-line" onclick="openCoin('${coin.id}')" style="cursor:pointer">
+              <strong>${coin.symbol} · ${fmtMoney(coin.market_cap)}</strong>
+              <small>24ч ${fmtPct(coin.change_24h)} · Vol/Cap ${(coin.vol_ratio * 100).toFixed(0)}% · FDV ${coin.fdv_ratio.toFixed(2)}x · risk ${coin.risk_score}</small>
+              <small>${(coin.risk_flags || []).slice(0, 3).join(" | ") || "повышенный риск распределения"}</small>
+            </div>
+          `).join("")
+        : '<div class="empty">Пока нет ярких fresh large-cap кандидатов под раздачу.</div>';
+
+      document.getElementById("dumpRiskList").innerHTML = dumpRisk.length
+        ? dumpRisk.map((coin) => `
+            <div class="risk-line" onclick="openCoin('${coin.id}')" style="cursor:pointer">
+              <strong>${coin.symbol} · ${fmtMoney(coin.price)}</strong>
+              <small>24ч ${fmtPct(coin.change_24h)} · 7д ${fmtPct(coin.change_7d)} · RSI ${coin.rsi} · risk ${coin.risk_score}</small>
+              <small>${(coin.risk_flags || []).slice(0, 3).join(" | ") || "рынок давит вниз"}</small>
+            </div>
+          `).join("")
+        : '<div class="empty">Сильных дамп-сигналов сейчас немного.</div>';
+    }
+
+    function renderNews() {
+      const grid = document.getElementById("newsGrid");
+      if (!state.news.length) {
+        grid.innerHTML = '<div class="loading">Собираю новости...</div>';
+        return;
+      }
+      grid.innerHTML = state.news.map((item) => `
+        <a class="news-card" href="${item.link}" target="_blank" rel="noreferrer">
+          <div class="news-source">${item.source}</div>
+          <div class="news-title">${item.title}</div>
+          <div class="news-desc">${item.description || "Открыть источник и прочитать подробнее."}</div>
+          <div class="news-meta">
+            <span>${fmtAgo(item.published_at)}</span>
+            <span>Открыть ↗</span>
+          </div>
+        </a>
+      `).join("");
+    }
+
+    function saveWatch() {
+      localStorage.setItem("crypto_watchlist", JSON.stringify(state.watchlist));
+    }
+
+    function saveAlerts() {
+      localStorage.setItem("crypto_alerts", JSON.stringify(state.alerts));
+    }
+
+    function toggleWatch(coinId) {
+      if (state.watchlist.includes(coinId)) {
+        state.watchlist = state.watchlist.filter((id) => id !== coinId);
+      } else {
+        state.watchlist.unshift(coinId);
+      }
+      saveWatch();
+      renderPulse();
+      renderWatch();
+    }
+
+    function addWatch() {
+      const input = document.getElementById("watchInput");
+      const value = input.value.trim().toUpperCase();
+      if (!value) return;
+      const coin = findCoinBySymbol(value);
+      if (!coin) {
+        toast("Монета не найдена в текущем universe.");
+        return;
+      }
+      if (!state.watchlist.includes(coin.id)) state.watchlist.unshift(coin.id);
+      saveWatch();
+      input.value = "";
+      renderWatch();
+      renderPulse();
+      toast(`${coin.symbol} добавлен в watchlist`);
+    }
+
+    function removeWatch(coinId) {
+      state.watchlist = state.watchlist.filter((id) => id !== coinId);
+      saveWatch();
+      renderWatch();
+      renderPulse();
+    }
+
+    function addAlert() {
+      const symbol = document.getElementById("alertSymbol").value.trim().toUpperCase();
+      const direction = document.getElementById("alertDirection").value;
+      const price = Number(document.getElementById("alertPrice").value);
+      if (!symbol || Number.isNaN(price)) {
+        toast("Заполни тикер и цену.");
+        return;
+      }
+      state.alerts.unshift({ symbol, direction, price });
+      saveAlerts();
+      document.getElementById("alertSymbol").value = "";
+      document.getElementById("alertPrice").value = "";
+      renderWatch();
+      toast(`Алерт на ${symbol} создан`);
+    }
+
+    function removeAlert(index) {
+      state.alerts.splice(index, 1);
+      saveAlerts();
+      renderWatch();
+    }
+
+    function renderWatch() {
+      const watchTarget = document.getElementById("watchList");
+      const alertTarget = document.getElementById("alertList");
+
+      if (!state.watchlist.length) {
+        watchTarget.innerHTML = '<div class="empty">Watchlist пуст. Добавь монеты по тикеру.</div>';
+      } else {
+        watchTarget.innerHTML = state.watchlist.map((coinId) => {
+          const coin = state.market.find((item) => item.id === coinId);
+          if (!coin) return "";
+          return `
+            <div class="watch-row">
+              <div onclick="openCoin('${coin.id}')" style="cursor:pointer">
+                <div class="watch-title">${coin.symbol} · ${fmtMoney(coin.price)}</div>
+                <div class="watch-subtitle">signal ${coin.signal_score} · fresh ${coin.fresh_score} · risk ${coin.risk_score} · 24ч ${fmtPct(coin.change_24h)}</div>
+              </div>
+              <button class="icon-btn" type="button" onclick="removeWatch('${coin.id}')">✕</button>
+            </div>
+          `;
+        }).join("");
+      }
+
+      if (!state.alerts.length) {
+        alertTarget.innerHTML = '<div class="empty">Алертов пока нет.</div>';
+      } else {
+        alertTarget.innerHTML = state.alerts.map((alert, index) => {
+          const coin = findCoinBySymbol(alert.symbol);
+          const current = coin ? coin.price : null;
+          const distance = current ? ((alert.price - current) / current) * 100 : null;
+          return `
+            <div class="watch-row">
+              <div>
+                <div class="watch-title">${alert.symbol} · ${alert.direction === "above" ? "выше" : "ниже"} ${fmtMoney(alert.price)}</div>
+                <div class="watch-subtitle">
+                  ${current ? `сейчас ${fmtMoney(current)} · дистанция ${distance >= 0 ? "+" : ""}${distance.toFixed(1)}%` : "жду монету в universe"}
+                </div>
+              </div>
+              <button class="icon-btn" type="button" onclick="removeAlert(${index})">✕</button>
+            </div>
+          `;
+        }).join("");
+      }
+    }
+
+    function checkAlerts() {
+      state.alerts = state.alerts.filter((alert) => {
+        const coin = findCoinBySymbol(alert.symbol);
+        if (!coin) return true;
+        const hitAbove = alert.direction === "above" && coin.price >= alert.price;
+        const hitBelow = alert.direction === "below" && coin.price <= alert.price;
+        if (!hitAbove && !hitBelow) return true;
+        const key = `${alert.symbol}:${alert.direction}:${alert.price}`;
+        if (state.latestToastKey !== key) {
+          toast(`🔔 ${alert.symbol} достиг ${fmtMoney(alert.price)}`);
+          state.latestToastKey = key;
+        }
+        return false;
+      });
+      saveAlerts();
+      renderWatch();
+    }
+
+    async function openCoin(coinId) {
+      state.previousTab = state.tab;
+      setTab("coin");
+      document.getElementById("coinDetail").innerHTML = '<div class="loading">Загружаю детальный экран...</div>';
+      await loadCoinDetail(coinId, 30);
+    }
+
+    async function loadCoinDetail(coinId, days) {
+      try {
+        const response = await fetch(`/api/coin/${coinId}?days=${days}`);
+        if (!response.ok) throw new Error("coin_failed");
+        state.currentCoin = await response.json();
+        renderCoinDetail(days);
+      } catch (error) {
+        document.getElementById("coinDetail").innerHTML = '<div class="empty">Не получилось загрузить детальный экран.</div>';
+      }
+    }
+
+    function renderCoinDetail(activeDays) {
+      const coin = state.currentCoin;
+      if (!coin) return;
+      const homepage = coin.homepage ? `<a class="ghost-btn" href="${coin.homepage}" target="_blank" rel="noreferrer" style="display:inline-flex;align-items:center">Сайт ↗</a>` : "";
+      const riskPills = (coin.risk_flags || []).length
+        ? (coin.risk_flags || []).map((flag) => `<span class="note-pill">${flag}</span>`).join("")
+        : '<span class="note-pill" style="color:var(--amber);border-color:rgba(255,209,102,0.2);background:rgba(255,209,102,0.08)">сильных red flags нет</span>';
+      document.getElementById("coinDetail").innerHTML = `
+        <div class="detail-surface detail-hero">
+          <div>
+            <div class="detail-title">
+              <img class="detail-avatar" src="${coin.image || ""}" alt="${coin.symbol}">
+              <div>
+                <div class="brand-kicker">${coin.name}</div>
+                <div class="brand-title" style="font-size:32px">${coin.symbol}</div>
+              </div>
+            </div>
+            <div class="detail-price">${fmtMoney(coin.price)}</div>
+            <div class="detail-change-row">
+              <span class="change-pill ${colorClass(coin.change_24h)}">${fmtPct(coin.change_24h)} · 24ч</span>
+              <span class="change-pill ${colorClass(coin.change_7d)}">${fmtPct(coin.change_7d)} · 7д</span>
+              <span class="change-pill ${colorClass(coin.change_30d)}">${fmtPct(coin.change_30d)} · 30д</span>
+            </div>
+            <div class="subtle-text">${coin.description || "Краткое описание не пришло, но вся рыночная и техническая часть уже перед тобой."}</div>
+          </div>
+          <div class="panel" style="padding:16px">
+            <div class="section-head" style="margin-bottom:12px">
+              <div>
+                <h2>Snapshot</h2>
+                <p>Сигнал, fresh-score, risk-score и рынок рядом с ATH.</p>
+              </div>
+              ${homepage}
+            </div>
+            <div class="entry-grid">
+              <div class="entry-item"><small>Signal</small><strong>${coin.signal_label}</strong></div>
+              <div class="entry-item"><small>Score</small><strong>${coin.signal_score}/100</strong></div>
+              <div class="entry-item"><small>Fresh</small><strong>${coin.fresh_score}</strong></div>
+              <div class="entry-item"><small>Risk</small><strong>${coin.risk_score}</strong></div>
+            </div>
+            <div style="margin-top:14px">${riskPills}</div>
+          </div>
+        </div>
+
+        <div class="detail-grid">
+          <div class="detail-surface chart-panel" style="padding:16px">
+            <div class="section-head" style="margin-bottom:10px">
+              <div>
+                <h2>Price chart</h2>
+                <p>График остается в центре экрана, а не прячется в мелочи.</p>
+              </div>
+            </div>
+            <canvas id="priceChart"></canvas>
+            <div class="period-row">
+              ${[7, 30, 90, 180].map((day) => `<button class="period-btn ${activeDays === day ? "active" : ""}" onclick="changeCoinPeriod(${day})">${day}д</button>`).join("")}
+            </div>
+          </div>
+
+          <div class="signal-panel">
+            <div class="signal-box ${coin.signal_type}">
+              <div class="subtle-text">Торговый план</div>
+              <div class="signal-score">${coin.signal_score}</div>
+              <div style="margin-top:6px;font-weight:700">${coin.signal_label}</div>
+              <div class="subtle-text" style="margin-top:8px">
+                Fresh ${coin.fresh_score} · Risk ${coin.risk_score} · Fear & Greed ${coin.fear_greed.value}
+              </div>
+            </div>
+
+            <div class="detail-surface" style="padding:16px">
+              <div class="entry-grid">
+                <div class="entry-item"><small>Entry</small><strong>${coin.entry_zone}</strong></div>
+                <div class="entry-item"><small>Stop</small><strong>${fmtMoney(coin.stop_loss)}</strong></div>
+                <div class="entry-item"><small>TP1</small><strong>${fmtMoney(coin.tp1)}</strong></div>
+                <div class="entry-item"><small>TP2</small><strong>${fmtMoney(coin.tp2)}</strong></div>
+                <div class="entry-item"><small>TP3</small><strong>${fmtMoney(coin.tp3)}</strong></div>
+                <div class="entry-item"><small>ATH gap</small><strong>${coin.ath_gap_pct.toFixed(1)}%</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-band">
+          <div class="detail-stat"><small>Market Cap</small><strong>${fmtMoney(coin.market_cap)}</strong></div>
+          <div class="detail-stat"><small>Volume 24h</small><strong>${fmtMoney(coin.volume)}</strong></div>
+          <div class="detail-stat"><small>Vol / Cap</small><strong>${(coin.vol_ratio * 100).toFixed(1)}%</strong></div>
+          <div class="detail-stat"><small>FDV / MCap</small><strong>${coin.fdv_ratio.toFixed(2)}x</strong></div>
+          <div class="detail-stat"><small>RSI</small><strong>${coin.rsi}</strong></div>
+          <div class="detail-stat"><small>MACD Hist</small><strong>${coin.macd_hist === null ? "N/A" : coin.macd_hist}</strong></div>
+          <div class="detail-stat"><small>EMA 20 / 50</small><strong>${coin.ema20 ? `${fmtMoney(coin.ema20)} / ${fmtMoney(coin.ema50)}` : "N/A"}</strong></div>
+          <div class="detail-stat"><small>ATH</small><strong>${fmtMoney(coin.ath)}</strong></div>
+        </div>
+
+        <div class="detail-notes">
+          <div class="detail-surface" style="padding:16px">
+            <div class="section-head" style="margin-bottom:8px">
+              <div>
+                <h2>Onchain and sentiment</h2>
+                <p>TVL, потоки ликвидности и общий настрой рынка.</p>
+              </div>
+            </div>
+            <div class="note-list">
+              <div>Fear & Greed: <strong>${coin.fear_greed.value}</strong> · ${coin.fear_greed.label}</div>
+              <div>TVL: <strong>${coin.defi && coin.defi.tvl ? fmtMoney(coin.defi.tvl) : "N/A"}</strong></div>
+              <div>TVL change: <strong>${coin.defi && coin.defi.tvl_change !== null ? fmtPct(coin.defi.tvl_change) : "N/A"}</strong></div>
+              <div>Liquidity flows 7d: <strong>${coin.defi && coin.defi.flows !== null ? fmtMoney(Math.abs(coin.defi.flows)) : "N/A"}</strong></div>
+              <div>Sentiment up votes: <strong>${coin.sentiment_up ? `${coin.sentiment_up.toFixed(0)}%` : "N/A"}</strong></div>
+              <div>Developer score: <strong>${coin.developer_score ? `${coin.developer_score.toFixed(1)}/100` : "N/A"}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-surface" style="padding:16px">
+            <div class="section-head" style="margin-bottom:8px">
+              <div>
+                <h2>Risk notes</h2>
+                <p>На что смотреть, если боишься скама или ранней раздачи.</p>
+              </div>
+            </div>
+            <div class="note-list">
+              <div>Risk score: <strong>${coin.risk_score}</strong></div>
+              <div>Fresh score: <strong>${coin.fresh_score}</strong></div>
+              <div>Supply ratio: <strong>${coin.supply_ratio ? `${(coin.supply_ratio * 100).toFixed(1)}%` : "N/A"}</strong></div>
+              <div>Bollinger: <strong>${coin.bb_low ? `${fmtMoney(coin.bb_low)} / ${fmtMoney(coin.bb_mid)} / ${fmtMoney(coin.bb_high)}` : "N/A"}</strong></div>
+            </div>
+            <div style="margin-top:12px">${riskPills}</div>
+          </div>
+        </div>
+      `;
+      drawChart(coin.chart || []);
+    }
+
+    function drawChart(points) {
+      const canvas = document.getElementById("priceChart");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (state.chart) state.chart.destroy();
+      const labels = points.map((point) => {
+        const date = new Date(point[0]);
+        return `${date.getDate()}.${date.getMonth() + 1}`;
+      });
+      const data = points.map((point) => point[1]);
+      const signalType = state.currentCoin ? state.currentCoin.signal_type : "wait";
+      const color = signalType === "buy" ? "#66f7a7" : signalType === "sell" ? "#ff6f7f" : "#ffd166";
+      state.chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            data,
+            borderColor: color,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.32,
+            fill: true,
+            backgroundColor(context) {
+              const gradient = context.chart.ctx.createLinearGradient(0, 0, 0, 320);
+              gradient.addColorStop(0, `${color}55`);
+              gradient.addColorStop(1, `${color}00`);
+              return gradient;
+            }
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { color: "#88a0ba", maxTicksLimit: 8 }
+            },
+            y: {
+              grid: { color: "rgba(130,160,190,0.12)" },
+              ticks: {
+                color: "#88a0ba",
+                callback(value) { return fmtMoney(value); }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    async function changeCoinPeriod(days) {
+      if (!state.currentCoin) return;
+      await loadCoinDetail(state.currentCoin.id, days);
+    }
+
+    async function loadOverview() {
+      const response = await fetch("/api/market?limit=700");
+      if (!response.ok) throw new Error("market_failed");
+      state.overview = await response.json();
+      state.market = state.overview.items || [];
+    }
+
+    async function loadNews() {
+      const response = await fetch("/api/news?limit=12");
+      if (!response.ok) throw new Error("news_failed");
+      const payload = await response.json();
+      state.news = payload.items || [];
+    }
+
+    function renderHeader() {
+      if (!state.overview) return;
+      const fear = state.overview.fear_greed || { value: "--", label: "Neutral" };
+      document.getElementById("updatedBadge").innerHTML = `Обновлено <strong>${fmtAgo(state.overview.updated_at)}</strong>`;
+      document.getElementById("fearBadge").innerHTML = `F&G <strong>${fear.value}</strong> · ${fear.label}`;
+      document.getElementById("coverageText").textContent = `Текущее покрытие: ${state.market.length} монет в market universe и ${state.news.length || 0} новостей в ленте.`;
+
+      const global = state.overview.global || {};
+      document.getElementById("statsGrid").innerHTML = `
+        <div class="stat">
+          <div class="stat-label">Total Market Cap</div>
+          <div class="stat-value">${fmtMoney(global.total_market_cap)}</div>
+          <div class="stat-foot">весь рынок</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">24h Volume</div>
+          <div class="stat-value">${fmtMoney(global.total_volume)}</div>
+          <div class="stat-foot">оборот за сутки</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">BTC Dominance</div>
+          <div class="stat-value">${global.btc_dominance ? `${global.btc_dominance.toFixed(1)}%` : "--"}</div>
+          <div class="stat-foot">доля биткоина</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Tracked Coins</div>
+          <div class="stat-value">${state.market.length}</div>
+          <div class="stat-foot">${global.active_cryptocurrencies || "--"} активных на рынке</div>
+        </div>
+      `;
+
+      const trending = state.overview.trending || [];
+      document.getElementById("trendingRow").innerHTML = trending.length
+        ? trending.map((coin) => `<button class="chip" type="button" onclick="openCoin('${coin.id}')">${coin.symbol} · trend #${coin.rank || "--"}</button>`).join("")
+        : '<span class="chip active">Тренды загружаются</span>';
+    }
+
+    async function refreshAll() {
+      try {
+        document.getElementById("marketGrid").innerHTML = '<div class="loading">Обновляю данные рынка...</div>';
+        await Promise.all([loadOverview(), loadNews()]);
+        renderHeader();
+        renderPulse();
+        applyScreener();
+        renderRisk();
+        renderNews();
+        renderWatch();
+        checkAlerts();
+      } catch (error) {
+        document.getElementById("marketGrid").innerHTML = '<div class="empty">Не получилось загрузить данные. Проверь, что Railway-сервис отвечает на `/api/market`.</div>';
+        document.getElementById("newsGrid").innerHTML = '<div class="empty">Не получилось загрузить новости.</div>';
+      }
+    }
+
+    function bindPresetHandler() {
+      document.getElementById("presetSelect").addEventListener("change", () => {
+        applyPresetDefaults(document.getElementById("presetSelect").value);
+        applyScreener();
+      });
+    }
+
+    function initTelegram() {
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+    }
+
+    bindPresetHandler();
+    initTelegram();
+    applyPresetDefaults("smart");
+    renderWatch();
+    refreshAll();
+    setInterval(refreshAll, 60000);
+  </script>
 </body>
 </html>
