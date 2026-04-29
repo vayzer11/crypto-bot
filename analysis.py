@@ -1,38 +1,27 @@
 """
-analysis.py - market intelligence, screening, news, and coin analysis helpers.
+analysis.py - technical analysis helpers for the Telegram bot and mini app.
 
-Built around free/public-friendly endpoints first:
-- CoinGecko market data
-- DeFiLlama TVL
-- Alternative.me Fear & Greed
-- RSS feeds for crypto headlines
+Main fixes in this version:
+- cache market snapshots to avoid CoinGecko 429 floods
+- remove invalid market queries like order=gecko_desc
+- use a saner market-level RSI proxy for scans
 """
 
 from __future__ import annotations
 
 import asyncio
-import html
+import json
 import os
 import statistics
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+import time
+from pathlib import Path
 from typing import Any, Optional
 
 import aiohttp
 
-COINGECKO_BASE = (
-    "https://pro-api.coingecko.com/api/v3"
-    if os.getenv("COINGECKO_USE_PRO", "").lower() in {"1", "true", "yes"}
-    else "https://api.coingecko.com/api/v3"
-)
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
+COINGECKO = "https://api.coingecko.com/api/v3"
 DEFILLAMA = "https://api.llama.fi"
-NEWS_FEEDS = [
-    ("Cointelegraph", "https://cointelegraph.com/rss"),
-    ("Decrypt", "https://decrypt.co/feed"),
-    ("The Block", "https://www.theblock.co/rss.xml"),
-]
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
 SYMBOL_MAP = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
@@ -106,10 +95,10 @@ def fmt_price(price: float) -> str:
     if price >= 1000:
         return f"${price:,.0f}"
     if price >= 1:
-        return f"${price:,.4f}"
+        return f"${price:.4f}"
     if price >= 0.01:
-        return f"${price:,.6f}"
-    return f"${price:,.8f}"
+        return f"${price:.6f}"
+    return f"${price:.8f}"
 
 
 def fmt_b(value: float) -> str:
@@ -120,34 +109,6 @@ def fmt_b(value: float) -> str:
     if value >= 1e6:
         return f"${value / 1e6:.1f}M"
     return f"${value:,.0f}"
-
-
-def fmt_pct(value: float) -> str:
-    return f"{value:+.1f}%"
-
-
-def clean_text(value: str) -> str:
-    return " ".join(html.unescape(value or "").split())
-
-
-def chunked(items: list[Any], size: int) -> list[list[Any]]:
-    return [items[i:i + size] for i in range(0, len(items), size)]
-
-
-def parse_iso_date(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def days_since(value: Optional[str]) -> Optional[int]:
-    parsed = parse_iso_date(value)
-    if not parsed:
-        return None
-    return max(0, int((datetime.now(timezone.utc) - parsed).total_seconds() // 86400))
 
 
 def calc_rsi(prices: list[float], period: int = 14) -> float:
@@ -167,10 +128,10 @@ def calc_rsi(prices: list[float], period: int = 14) -> float:
 def calc_ema(prices: list[float], period: int) -> list[float]:
     if len(prices) < period:
         return []
-    k = 2 / (period + 1)
+    factor = 2 / (period + 1)
     ema = [sum(prices[:period]) / period]
     for price in prices[period:]:
-        ema.append(price * k + ema[-1] * (1 - k))
+        ema.append(price * factor + ema[-1] * (1 - factor))
     return ema
 
 
@@ -203,42 +164,103 @@ def rsi_signal(rsi: float) -> str:
     if rsi >= 70:
         return "🟠 ПЕРЕКУПЛЕН"
     if rsi >= 60:
-        return "🟡 СИЛЬНЫЙ ИМПУЛЬС"
+        return "🟡 Нейтрально-бычий"
     if rsi >= 40:
-        return "🟡 НЕЙТРАЛЬНАЯ ЗОНА"
+        return "🟡 Нейтральная зона"
     if rsi >= 30:
-        return "🟢 БЛИЗКО К ПЕРЕПРОДАННОСТИ"
-    return "🟢 ПЕРЕПРОДАН"
+        return "🟢 Близко к перепроданности"
+    return "🟢 ПЕРЕПРОДАН — возможен отскок"
 
 
-def estimated_rsi(change_1h: float, change_24h: float, change_7d: float, change_30d: float) -> int:
-    raw = 50 + (change_1h * 2.2) + (change_24h * 0.9) + (change_7d * 0.45) + (change_30d * 0.08)
-    return int(round(clamp(raw, 5, 95)))
+def market_rsi_proxy(change_1h: float, change_24h: float, change_7d: float, vol_ratio: float) -> float:
+    score = 50 + change_1h * 2.0 + change_24h * 1.1 + change_7d * 0.55
+    if vol_ratio > 0.35:
+        score += 4
+    return round(clamp(score, 6, 94), 1)
 
 
-def trend_label(change_24h: float, change_7d: float) -> str:
-    if change_24h > 0 and change_7d > 0:
-        return "bullish"
-    if change_24h < 0 and change_7d < 0:
-        return "bearish"
-    return "neutral"
+def overall_signal(
+    rsi: float,
+    macd_hist: Optional[float],
+    price: float,
+    bb_low: Optional[float],
+    bb_mid: Optional[float],
+    bb_high: Optional[float],
+    vol_ratio: float,
+    onchain_score: int = 0,
+) -> tuple[str, str]:
+    score = 0
+    if rsi < 30:
+        score += 2
+    elif rsi < 40:
+        score += 1
+    elif rsi > 70:
+        score -= 2
+    elif rsi > 60:
+        score -= 1
+
+    if macd_hist is not None:
+        score += 1 if macd_hist > 0 else -1
+
+    if bb_low is not None and bb_high is not None:
+        if price < bb_low:
+            score += 2
+        elif price > bb_high:
+            score -= 2
+
+    if vol_ratio > 0.3:
+        score += 1
+
+    score += onchain_score
+
+    if score >= 3:
+        return "🟢 ПОКУПАТЬ", "Сильный сигнал на вход"
+    if score >= 1:
+        return "🟡 ЖДАТЬ / Осторожная покупка", "Слабый бычий сигнал"
+    if score <= -3:
+        return "🔴 ПРОДАВАТЬ / НЕ ВХОДИТЬ", "Сильный медвежий сигнал"
+    if score <= -1:
+        return "🟠 ОСТОРОЖНО", "Нейтрально-медвежий сигнал"
+    return "🟡 ЖДАТЬ", "Нейтральная зона"
 
 
 class CryptoAnalyzer:
     def __init__(self) -> None:
-        self.coingecko_key = COINGECKO_API_KEY
-        self.coingecko_base = COINGECKO_BASE
+        self._cache_dir = Path(__file__).resolve().parent
+        self._market_cache_path = self._cache_dir / "market_cache.json"
+        self._fg_cache_path = self._cache_dir / "fear_greed_cache.json"
 
-    def _request_headers(self, extra_headers: Optional[dict[str, str]] = None) -> dict[str, str]:
-        headers = {
-            "User-Agent": "CryptoSignalBot/2.0",
-            "Accept": "application/json, text/plain, */*",
-        }
-        if self.coingecko_key:
-            key_header = "x-cg-pro-api-key" if "pro-api" in self.coingecko_base else "x-cg-demo-api-key"
-            headers[key_header] = self.coingecko_key
-        if extra_headers:
-            headers.update(extra_headers)
+        market_payload = self._load_cache_payload(self._market_cache_path, [])
+        self._market_cache: list[dict[str, Any]] = market_payload["data"]
+        self._market_cache_time = market_payload["ts"]
+        self._market_cache_ttl = 240
+        self._market_lock = asyncio.Lock()
+
+        fg_payload = self._load_cache_payload(self._fg_cache_path, {"value": 50, "label": "Neutral"})
+        self._fg_cache = fg_payload["data"]
+        self._fg_cache_time = fg_payload["ts"]
+        self._fg_cache_ttl = 300
+
+    def _load_cache_payload(self, path: Path, default: Any) -> dict[str, Any]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and "data" in payload:
+                return {"ts": float(payload.get("ts", 0)), "data": payload.get("data", default)}
+        except Exception:
+            pass
+        return {"ts": 0.0, "data": default}
+
+    def _save_cache_payload(self, path: Path, data: Any) -> None:
+        try:
+            payload = {"ts": time.time(), "data": data}
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"User-Agent": "CryptoSignalBot/1.1"}
+        if COINGECKO_API_KEY:
+            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
         return headers
 
     async def _get_json(
@@ -247,13 +269,24 @@ class CryptoAnalyzer:
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
     ) -> Optional[Any]:
-        timeout = aiohttp.ClientTimeout(total=25)
+        request_headers = self._headers()
+        if headers:
+            request_headers.update(headers)
+
         try:
-            async with aiohttp.ClientSession(headers=self._request_headers(headers), timeout=timeout) as session:
-                async with session.get(url, params=params) as response:
+            async with aiohttp.ClientSession(headers=request_headers) as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as response:
                     if response.status == 429:
-                        await asyncio.sleep(4)
-                        async with session.get(url, params=params) as retry:
+                        await asyncio.sleep(3)
+                        async with session.get(
+                            url,
+                            params=params,
+                            timeout=aiohttp.ClientTimeout(total=20),
+                        ) as retry:
                             if retry.status == 200:
                                 return await retry.json()
                         return None
@@ -263,38 +296,20 @@ class CryptoAnalyzer:
             return None
         return None
 
-    async def _get_text(
-        self,
-        url: str,
-        headers: Optional[dict[str, str]] = None,
-    ) -> Optional[str]:
-        timeout = aiohttp.ClientTimeout(total=20)
-        try:
-            async with aiohttp.ClientSession(headers=self._request_headers(headers), timeout=timeout) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        return await response.text()
-        except Exception:
-            return None
-        return None
-
     async def _resolve_id(self, symbol: str) -> str:
-        symbol = symbol.strip()
         if symbol.upper() in SYMBOL_MAP:
             return SYMBOL_MAP[symbol.upper()]
-        if "-" in symbol or symbol.islower():
-            return symbol.lower()
-        data = await self._get_json(f"{self.coingecko_base}/search", {"query": symbol})
+        data = await self._get_json(f"{COINGECKO}/search", {"query": symbol})
         if data and data.get("coins"):
-            for coin in data["coins"][:8]:
+            for coin in data["coins"][:5]:
                 if coin.get("symbol", "").upper() == symbol.upper():
                     return coin["id"]
             return data["coins"][0]["id"]
         return symbol.lower()
 
-    async def _get_prices(self, coin_id: str, days: int = 90) -> list[float]:
+    async def _get_prices(self, coin_id: str, days: int = 60) -> list[float]:
         data = await self._get_json(
-            f"{self.coingecko_base}/coins/{coin_id}/market_chart",
+            f"{COINGECKO}/coins/{coin_id}/market_chart",
             {"vs_currency": "usd", "days": days, "interval": "daily"},
         )
         if not data:
@@ -302,319 +317,221 @@ class CryptoAnalyzer:
         return [safe_float(point[1]) for point in data.get("prices", [])]
 
     async def _get_fear_greed(self) -> dict[str, Any]:
+        now = time.time()
+        if now - self._fg_cache_time < self._fg_cache_ttl:
+            return self._fg_cache
+
         data = await self._get_json("https://api.alternative.me/fng/")
         if data and data.get("data"):
             item = data["data"][0]
-            return {
+            self._fg_cache = {
                 "value": int(item.get("value", 50)),
                 "label": item.get("value_classification", "Neutral"),
             }
-        return {"value": 50, "label": "Neutral"}
+            self._fg_cache_time = now
+            self._save_cache_payload(self._fg_cache_path, self._fg_cache)
+        return self._fg_cache
 
-    async def _get_global_market(self) -> dict[str, Any]:
-        data = await self._get_json(f"{self.coingecko_base}/global")
-        payload = data.get("data", {}) if data else {}
-        total_cap = safe_float((payload.get("total_market_cap") or {}).get("usd"))
-        total_vol = safe_float((payload.get("total_volume") or {}).get("usd"))
-        btc_dom = safe_float((payload.get("market_cap_percentage") or {}).get("btc"))
-        active = int(payload.get("active_cryptocurrencies") or 0)
-        return {
-            "total_market_cap": total_cap,
-            "total_volume": total_vol,
-            "btc_dominance": btc_dom,
-            "active_cryptocurrencies": active,
-        }
+    async def _get_defi_llama(self, symbol: str) -> dict[str, Any]:
+        result = {"tvl": None, "tvl_change": None, "flows": None}
+        try:
+            protocols = await self._get_json(f"{DEFILLAMA}/protocols")
+            if not protocols:
+                return result
 
-    async def _get_trending(self) -> list[dict[str, Any]]:
-        data = await self._get_json(f"{self.coingecko_base}/search/trending")
-        coins = []
-        for item in (data or {}).get("coins", [])[:7]:
-            payload = item.get("item", {})
-            coins.append(
-                {
-                    "id": payload.get("id"),
-                    "name": payload.get("name"),
-                    "symbol": (payload.get("symbol") or "").upper(),
-                    "rank": payload.get("market_cap_rank"),
-                    "price_btc": safe_float(payload.get("price_btc")),
-                    "thumb": payload.get("thumb"),
-                }
+            symbol_lower = symbol.lower()
+            protocol = next(
+                (
+                    item for item in protocols
+                    if item.get("symbol", "").lower() == symbol_lower
+                    or symbol_lower in item.get("name", "").lower()
+                ),
+                None,
             )
-        return coins
+            if not protocol:
+                return result
 
-    async def _get_defi_llama(self, symbol: str) -> dict[str, Optional[float]]:
-        result: dict[str, Optional[float]] = {"tvl": None, "tvl_change": None, "flows": None}
-        protocols = await self._get_json(f"{DEFILLAMA}/protocols")
-        if not protocols:
+            slug = protocol.get("slug") or protocol.get("name", "").lower().replace(" ", "-")
+            detail = await self._get_json(f"{DEFILLAMA}/protocol/{slug}")
+            if detail:
+                tvl_data = detail.get("tvl", [])
+                if len(tvl_data) >= 2:
+                    current_tvl = safe_float(tvl_data[-1].get("totalLiquidityUSD"))
+                    prev_tvl = safe_float(tvl_data[-2].get("totalLiquidityUSD"))
+                    result["tvl"] = current_tvl
+                    result["tvl_change"] = ((current_tvl - prev_tvl) / prev_tvl * 100) if prev_tvl else 0
+                    if len(tvl_data) >= 7:
+                        week_ago = safe_float(tvl_data[-7].get("totalLiquidityUSD"))
+                        result["flows"] = current_tvl - week_ago
+        except Exception:
             return result
-        symbol_lower = symbol.lower()
-        protocol = next(
-            (
-                item
-                for item in protocols
-                if item.get("symbol", "").lower() == symbol_lower
-                or symbol_lower in item.get("name", "").lower()
-            ),
-            None,
-        )
-        if not protocol:
-            return result
-        slug = protocol.get("slug") or protocol.get("name", "").lower().replace(" ", "-")
-        detail = await self._get_json(f"{DEFILLAMA}/protocol/{slug}")
-        if not detail:
-            return result
-        tvl_history = detail.get("tvl", [])
-        if len(tvl_history) >= 2:
-            current = safe_float(tvl_history[-1].get("totalLiquidityUSD"))
-            prev = safe_float(tvl_history[-2].get("totalLiquidityUSD"))
-            result["tvl"] = current
-            result["tvl_change"] = ((current - prev) / prev * 100) if prev else 0
-            if len(tvl_history) >= 7:
-                week_ago = safe_float(tvl_history[-7].get("totalLiquidityUSD"))
-                result["flows"] = current - week_ago
         return result
 
-    def _score_fresh(self, coin: dict[str, Any]) -> int:
-        score = 0
-        freshness_days = coin.get("freshness_days")
+    def _normalize_market_coin(self, coin: dict[str, Any]) -> dict[str, Any]:
+        price = safe_float(coin.get("current_price"))
         market_cap = safe_float(coin.get("market_cap"))
-        vol_ratio = safe_float(coin.get("vol_ratio"))
-        fdv_ratio = safe_float(coin.get("fdv_ratio"))
-        ath_gap = safe_float(coin.get("ath_gap_pct"))
-        change_7d = safe_float(coin.get("change_7d"))
+        volume = safe_float(coin.get("total_volume"))
+        change_1h = safe_float(coin.get("price_change_percentage_1h_in_currency"))
+        change_24h = safe_float(coin.get("price_change_percentage_24h"))
+        change_7d = safe_float(coin.get("price_change_percentage_7d_in_currency"))
+        vol_ratio = (volume / market_cap) if market_cap else 0.0
+        rsi = market_rsi_proxy(change_1h, change_24h, change_7d, vol_ratio)
 
-        if freshness_days is not None and freshness_days <= 120:
-            score += 2
-        elif freshness_days is not None and freshness_days <= 240:
-            score += 1
-        if 50_000_000 <= market_cap <= 5_000_000_000:
-            score += 1
-        if vol_ratio >= 0.12:
-            score += 2
-        elif vol_ratio >= 0.07:
-            score += 1
-        if change_7d >= 5:
-            score += 1
-        if 1 < fdv_ratio <= 2.2:
-            score += 1
-        if -65 <= ath_gap <= -10:
-            score += 1
-        return score
+        return {
+            "id": coin.get("id"),
+            "symbol": coin.get("symbol", "").upper(),
+            "name": coin.get("name"),
+            "price": price,
+            "market_cap": market_cap,
+            "volume": volume,
+            "rank": coin.get("market_cap_rank"),
+            "change_1h": change_1h,
+            "change_24h": change_24h,
+            "change_7d": change_7d,
+            "ath": safe_float(coin.get("ath")),
+            "vol_ratio": vol_ratio,
+            "rsi": rsi,
+        }
 
-    def _score_risk(self, coin: dict[str, Any]) -> tuple[int, list[str]]:
-        score = 0
-        flags: list[str] = []
-        market_cap = safe_float(coin.get("market_cap"))
-        vol_ratio = safe_float(coin.get("vol_ratio"))
-        fdv_ratio = safe_float(coin.get("fdv_ratio"))
-        change_24h = safe_float(coin.get("change_24h"))
-        change_7d = safe_float(coin.get("change_7d"))
-        ath_gap = safe_float(coin.get("ath_gap_pct"))
-        rsi = safe_float(coin.get("rsi"))
-        supply_ratio = coin.get("supply_ratio")
-        freshness_days = coin.get("freshness_days")
-
-        if market_cap >= 100_000_000:
-            score += 1
-        if freshness_days is not None and freshness_days <= 120:
-            score += 1
-            flags.append("свежий листинг/хайп")
-        if change_24h <= -8:
-            score += 2
-            flags.append(f"24ч {fmt_pct(change_24h)}")
-        elif change_24h <= -4:
-            score += 1
-        if change_7d >= 25 and change_24h < 0:
-            score += 1
-            flags.append("резкий откат после пампа")
-        if vol_ratio >= 0.35:
-            score += 2
-            flags.append(f"объем/кап {vol_ratio * 100:.0f}%")
-        elif vol_ratio >= 0.20:
-            score += 1
-        if fdv_ratio >= 3:
-            score += 2
-            flags.append(f"FDV/MCap {fdv_ratio:.1f}x")
-        elif fdv_ratio >= 2:
-            score += 1
-        if supply_ratio is not None and supply_ratio <= 0.40:
-            score += 2
-            flags.append("низкая циркуляция")
-        elif supply_ratio is not None and supply_ratio <= 0.60:
-            score += 1
-        if ath_gap >= -15:
-            score += 1
-            flags.append("цена близко к ATH")
-        if rsi >= 72:
-            score += 1
-        return score, flags
-
-    def _score_signal(self, coin: dict[str, Any], fear_value: int = 50) -> tuple[str, str, int]:
+    def _coin_signal(self, coin: dict[str, Any], fg_value: int = 50) -> tuple[str, int]:
         score = 50
-        rsi = safe_float(coin.get("rsi"))
-        change_24h = safe_float(coin.get("change_24h"))
-        change_7d = safe_float(coin.get("change_7d"))
-        vol_ratio = safe_float(coin.get("vol_ratio"))
-        ath_gap = safe_float(coin.get("ath_gap_pct"))
-        risk_score = int(coin.get("risk_score") or 0)
-        fresh_score = int(coin.get("fresh_score") or 0)
+        rsi = coin["rsi"]
+        change_24h = coin["change_24h"]
+        change_7d = coin["change_7d"]
+        vol_ratio = coin["vol_ratio"]
 
-        if rsi <= 30:
+        if rsi <= 32:
             score += 18
         elif rsi <= 40:
             score += 10
-        elif rsi >= 75:
+        elif rsi >= 72:
             score -= 18
-        elif rsi >= 65:
+        elif rsi >= 64:
             score -= 10
 
         if change_24h > 0:
             score += 5
-        elif change_24h < -7 and rsi <= 35:
-            score += 6
-        elif change_24h < -7:
-            score -= 6
+        elif change_24h < -8:
+            score -= 8
 
-        if change_7d > 0:
-            score += 8
+        if change_7d > 4:
+            score += 6
         elif change_7d < -10:
             score -= 8
 
-        if vol_ratio >= 0.18:
-            score += 8
-        elif vol_ratio >= 0.10:
-            score += 4
+        if vol_ratio > 0.35:
+            score += 5
+        elif vol_ratio > 0.18:
+            score += 2
 
-        if ath_gap <= -35:
-            score += 6
-        elif ath_gap >= -10:
-            score -= 3
-
-        if fear_value <= 28:
+        if fg_value < 25:
             score += 4
-        elif fear_value >= 78:
+        elif fg_value > 75:
             score -= 4
 
-        score += min(8, fresh_score * 2)
-        score -= min(18, risk_score * 2)
-        score = int(clamp(score, 1, 99))
+        score = int(clamp(score, 5, 95))
+        if score >= 65:
+            return "buy", score
+        if score <= 35:
+            return "sell", score
+        return "wait", score
 
-        if score >= 68:
-            return "buy", "🟢 ПОКУПАТЬ", score
-        if score <= 38:
-            return "sell", "🔴 ПРОДАВАТЬ", score
-        return "wait", "🟡 ЖДАТЬ", score
+    async def _get_market_snapshot(self, limit: int = 200) -> list[dict[str, Any]]:
+        now = time.time()
+        if self._market_cache and (now - self._market_cache_time) < self._market_cache_ttl:
+            return self._market_cache[:limit]
 
-    def _enrich_coin(self, coin: dict[str, Any]) -> dict[str, Any]:
-        market_cap = safe_float(coin.get("market_cap"))
-        price = safe_float(coin.get("current_price"))
-        volume = safe_float(coin.get("total_volume"))
-        fdv = safe_float(coin.get("fully_diluted_valuation"), market_cap)
-        circulating = safe_float(coin.get("circulating_supply"))
-        total_supply = safe_float(coin.get("total_supply")) or safe_float(coin.get("max_supply"))
-        supply_ratio = (circulating / total_supply) if total_supply else None
-        ath = safe_float(coin.get("ath"))
-        ath_gap_pct = ((price - ath) / ath * 100) if ath else 0.0
-        freshness_days = days_since(coin.get("ath_date"))
-        change_1h = safe_float(coin.get("price_change_percentage_1h_in_currency"))
-        change_24h = safe_float(coin.get("price_change_percentage_24h"))
-        change_7d = safe_float(coin.get("price_change_percentage_7d_in_currency"))
-        change_30d = safe_float(coin.get("price_change_percentage_30d_in_currency"))
-        vol_ratio = (volume / market_cap) if market_cap else 0.0
-        fdv_ratio = (fdv / market_cap) if market_cap else 0.0
-        rsi = estimated_rsi(change_1h, change_24h, change_7d, change_30d)
+        async with self._market_lock:
+            now = time.time()
+            if self._market_cache and (now - self._market_cache_time) < self._market_cache_ttl:
+                return self._market_cache[:limit]
 
-        enriched = {
-            "id": coin.get("id"),
-            "symbol": (coin.get("symbol") or "").upper(),
-            "name": coin.get("name"),
-            "image": coin.get("image"),
-            "rank": coin.get("market_cap_rank"),
-            "price": price,
-            "market_cap": market_cap,
-            "fdv": fdv,
-            "volume": volume,
-            "change_1h": change_1h,
-            "change_24h": change_24h,
-            "change_7d": change_7d,
-            "change_30d": change_30d,
-            "ath": ath,
-            "ath_gap_pct": ath_gap_pct,
-            "ath_date": coin.get("ath_date"),
-            "freshness_days": freshness_days,
-            "vol_ratio": vol_ratio,
-            "fdv_ratio": fdv_ratio,
-            "supply_ratio": supply_ratio,
-            "rsi": rsi,
-            "trend": trend_label(change_24h, change_7d),
-            "last_updated": coin.get("last_updated"),
-        }
-        enriched["fresh_score"] = self._score_fresh(enriched)
-        risk_score, risk_flags = self._score_risk(enriched)
-        enriched["risk_score"] = risk_score
-        enriched["risk_flags"] = risk_flags
-        return enriched
+            pages = []
+            remaining = max(limit, 100)
+            page = 1
+            while remaining > 0:
+                per_page = min(250, remaining)
+                pages.append(
+                    self._get_json(
+                        f"{COINGECKO}/coins/markets",
+                        {
+                            "vs_currency": "usd",
+                            "order": "market_cap_desc",
+                            "per_page": per_page,
+                            "page": page,
+                            "sparkline": "false",
+                            "price_change_percentage": "1h,24h,7d",
+                        },
+                    )
+                )
+                remaining -= per_page
+                page += 1
 
-    async def _get_market_page(self, page: int, per_page: int = 250, order: str = "market_cap_desc") -> list[dict[str, Any]]:
-        payload = await self._get_json(
-            f"{self.coingecko_base}/coins/markets",
-            {
-                "vs_currency": "usd",
-                "order": order,
-                "per_page": per_page,
-                "page": page,
-                "sparkline": "false",
-                "price_change_percentage": "1h,24h,7d,30d",
-            },
-        )
-        if not payload:
+            responses = await asyncio.gather(*pages)
+            raw_market = [item for response in responses if response for item in response]
+            if raw_market:
+                self._market_cache = [self._normalize_market_coin(item) for item in raw_market]
+                self._market_cache_time = time.time()
+                self._save_cache_payload(self._market_cache_path, self._market_cache)
+                return self._market_cache[:limit]
+
+            if self._market_cache:
+                return self._market_cache[:limit]
             return []
-        return [self._enrich_coin(item) for item in payload]
 
-    async def get_market_snapshot(self, limit: int = 600, order: str = "market_cap_desc") -> list[dict[str, Any]]:
-        page_count = max(1, (limit + 249) // 250)
-        pages = await asyncio.gather(
-            *[self._get_market_page(page=index + 1, order=order) for index in range(page_count)]
-        )
-        coins = [coin for page in pages for coin in page]
-        deduped: dict[str, dict[str, Any]] = {}
+    async def _find_snapshot_coin(self, symbol: str, coin_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        coins = await self._get_market_snapshot(250)
+        symbol_upper = symbol.upper()
         for coin in coins:
-            if coin.get("id"):
-                deduped[coin["id"]] = coin
-        return list(deduped.values())[:limit]
+            if coin.get("symbol") == symbol_upper:
+                return coin
+            if coin_id and coin.get("id") == coin_id:
+                return coin
+        return None
 
-    async def get_market_overview(self, limit: int = 600) -> dict[str, Any]:
-        snapshot_task = self.get_market_snapshot(limit=limit)
-        fear_task = self._get_fear_greed()
-        global_task = self._get_global_market()
-        trending_task = self._get_trending()
-        snapshot, fear, global_market, trending = await asyncio.gather(
-            snapshot_task,
-            fear_task,
-            global_task,
-            trending_task,
+    def _build_snapshot_analysis(
+        self,
+        coin: dict[str, Any],
+        fg: dict[str, Any],
+        symbol: str,
+        detail_unavailable: bool = False,
+    ) -> str:
+        signal_type, score = self._coin_signal(coin, fg["value"])
+        signal_label = {
+            "buy": "🟢 ПОКУПАТЬ",
+            "sell": "🔴 ПРОДАВАТЬ",
+            "wait": "🟡 ЖДАТЬ",
+        }[signal_type]
+        signal_text = {
+            "buy": "Импульс и объем выглядят конструктивно.",
+            "sell": "Монета перегрета или под давлением.",
+            "wait": "Явного преимущества у входа сейчас нет.",
+        }[signal_type]
+        prefix = "⚠️ Расширенный анализ временно недоступен, показываю рыночный срез.\n\n" if detail_unavailable else ""
+
+        return (
+            f"{prefix}"
+            f"📊 *{coin['name']} ({symbol.upper()})* — быстрый анализ\n\n"
+            f"💰 *Цена:* {fmt_price(coin['price'])}\n"
+            f"📈 *Изменение:* {coin['change_24h']:+.2f}% (24ч) | {coin['change_7d']:+.2f}% (7д)\n"
+            f"🏦 *Капитализация:* {fmt_b(coin['market_cap'])}\n"
+            f"📦 *Объем 24ч:* {fmt_b(coin['volume'])} ({coin['vol_ratio'] * 100:.1f}% от капы)\n"
+            f"🔥 *RSI proxy:* `{coin['rsi']}`\n"
+            f"😐 *Fear & Greed:* `{fg['value']}` — {fg['label']}\n\n"
+            f"*{signal_label}* — score `{score}`\n"
+            f"_{signal_text}_\n\n"
+            f"🎯 *Точка входа:* {fmt_price(coin['price'])}\n"
+            f"🛑 *Стоп:* {fmt_price(coin['price'] * 0.94)}\n"
+            f"✅ *TP1:* {fmt_price(coin['price'] * 1.05)}\n"
+            f"✅ *TP2:* {fmt_price(coin['price'] * 1.10)}\n"
+            f"\n_/scan и /signals для общего рынка_"
         )
-        for coin in snapshot:
-            signal_type, signal_label, signal_score = self._score_signal(coin, fear["value"])
-            coin["signal_type"] = signal_type
-            coin["signal_label"] = signal_label
-            coin["signal_score"] = signal_score
-            coin["opportunity_score"] = max(
-                0,
-                int(signal_score + coin["fresh_score"] * 4 - coin["risk_score"] * 3),
-            )
-        return {
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "fear_greed": fear,
-            "global": global_market,
-            "trending": trending,
-            "items": snapshot,
-        }
 
-    async def get_coin_dashboard(self, symbol_or_id: str, chart_days: int = 30) -> dict[str, Any]:
-        coin_id = await self._resolve_id(symbol_or_id)
+    async def full_analysis(self, symbol: str) -> str:
+        coin_id = await self._resolve_id(symbol)
+
         market_task = self._get_json(
-            f"{self.coingecko_base}/coins/{coin_id}",
+            f"{COINGECKO}/coins/{coin_id}",
             {
                 "localization": "false",
                 "tickers": "false",
@@ -623,493 +540,370 @@ class CryptoAnalyzer:
                 "developer_data": "true",
             },
         )
-        chart_task = self._get_json(
-            f"{self.coingecko_base}/coins/{coin_id}/market_chart",
-            {"vs_currency": "usd", "days": chart_days},
-        )
-        prices_task = self._get_prices(coin_id, 90)
-        fear_task = self._get_fear_greed()
-        market, chart, prices, fear, defi = await asyncio.gather(
-            market_task,
-            chart_task,
-            prices_task,
-            fear_task,
-            self._get_defi_llama(symbol_or_id),
-        )
-        if not market:
-            raise ValueError("coin_not_found")
+        prices_task = self._get_prices(coin_id, 60)
+        fear_greed_task = self._get_fear_greed()
+        defi_task = self._get_defi_llama(symbol)
 
-        market_data = market.get("market_data") or {}
-        price = safe_float((market_data.get("current_price") or {}).get("usd"))
-        cap = safe_float((market_data.get("market_cap") or {}).get("usd"))
-        volume = safe_float((market_data.get("total_volume") or {}).get("usd"))
-        fdv = safe_float((market_data.get("fully_diluted_valuation") or {}).get("usd"), cap)
-        ath = safe_float((market_data.get("ath") or {}).get("usd"))
-        ath_change = safe_float((market_data.get("ath_change_percentage") or {}).get("usd"))
-        change_24h = safe_float(market_data.get("price_change_percentage_24h"))
-        change_7d = safe_float(market_data.get("price_change_percentage_7d"))
-        change_30d = safe_float(market_data.get("price_change_percentage_30d"))
-        circulating = safe_float(market_data.get("circulating_supply"))
-        total_supply = safe_float(market_data.get("total_supply")) or safe_float(market_data.get("max_supply"))
-        supply_ratio = (circulating / total_supply) if total_supply else None
-        vol_ratio = (volume / cap) if cap else 0.0
-        fdv_ratio = (fdv / cap) if cap else 0.0
-        rsi = calc_rsi(prices) if len(prices) >= 15 else 50.0
-        macd_val, macd_signal, macd_hist = calc_macd(prices) if len(prices) >= 30 else (None, None, None)
+        data, prices, fg, defi = await asyncio.gather(
+            market_task, prices_task, fear_greed_task, defi_task
+        )
+
+        snapshot_coin = await self._find_snapshot_coin(symbol, coin_id)
+
+        if not data:
+            if snapshot_coin:
+                return self._build_snapshot_analysis(snapshot_coin, fg, symbol, detail_unavailable=True)
+            return (
+                f"❌ Монета *{symbol}* не найдена.\n"
+                f"Попробуй: BTC, ETH, SOL, RENDER, TAO, WIF..."
+            )
+
+        md = data["market_data"]
+        price = safe_float(md["current_price"]["usd"])
+        cap = safe_float(md["market_cap"]["usd"])
+        volume = safe_float(md["total_volume"]["usd"])
+        change_24h = safe_float(md.get("price_change_percentage_24h"))
+        change_7d = safe_float(md.get("price_change_percentage_7d"))
+        change_30d = safe_float(md.get("price_change_percentage_30d"))
+        ath = safe_float(md["ath"]["usd"])
+        ath_change = safe_float((md.get("ath_change_percentage") or {}).get("usd"))
+        vol_ratio = (volume / cap) if cap > 0 else 0
+
+        rsi = calc_rsi(prices) if len(prices) >= 15 else (snapshot_coin["rsi"] if snapshot_coin else 50.0)
+        macd_val, _, macd_hist = calc_macd(prices) if len(prices) >= 30 else (None, None, None)
         bb_low, bb_mid, bb_high = calc_bollinger(prices) if len(prices) >= 20 else (None, None, None)
         ema20 = calc_ema(prices, 20)
         ema50 = calc_ema(prices, 50)
         ema20_val = ema20[-1] if ema20 else None
         ema50_val = ema50[-1] if ema50 else None
-        ath_gap_pct = ((price - ath) / ath * 100) if ath else 0.0
 
-        profile = {
-            "market_cap": cap,
-            "vol_ratio": vol_ratio,
-            "fdv_ratio": fdv_ratio,
-            "change_24h": change_24h,
-            "change_7d": change_7d,
-            "rsi": rsi,
-            "supply_ratio": supply_ratio,
-            "ath_gap_pct": ath_gap_pct,
-            "freshness_days": days_since(market_data.get("ath_date", {}).get("usd")),
-        }
-        profile["fresh_score"] = self._score_fresh(profile)
-        risk_score, risk_flags = self._score_risk(profile)
-        profile["risk_score"] = risk_score
-        profile["risk_flags"] = risk_flags
-        signal_type, signal_label, signal_score = self._score_signal(profile, fear["value"])
+        onchain_score = 0
+        if defi.get("tvl_change") and defi["tvl_change"] > 5:
+            onchain_score += 1
+        if defi.get("flows") and defi["flows"] > 0:
+            onchain_score += 1
+        if fg["value"] < 25:
+            onchain_score += 1
+        elif fg["value"] > 75:
+            onchain_score -= 1
 
-        stop_loss = round(price * 0.94, 8)
-        take_profit_1 = round(bb_mid if bb_mid else price * 1.05, 8)
-        take_profit_2 = round(bb_high if bb_high else price * 1.11, 8)
-        take_profit_3 = round(price * 1.18, 8)
-        entry_zone = (
-            f"{fmt_price(price * 0.98)} - {fmt_price(price)}"
-            if bb_low and bb_high
-            else fmt_price(price)
+        signal_label, signal_desc = overall_signal(
+            rsi, macd_hist, price, bb_low, bb_mid, bb_high, vol_ratio, onchain_score
         )
 
-        return {
-            "id": market.get("id"),
-            "symbol": (market.get("symbol") or "").upper(),
-            "name": market.get("name"),
-            "description": clean_text((market.get("description") or {}).get("en", ""))[:320],
-            "image": (market.get("image") or {}).get("large"),
-            "price": price,
-            "market_cap": cap,
-            "volume": volume,
-            "fdv": fdv,
-            "vol_ratio": vol_ratio,
-            "fdv_ratio": fdv_ratio,
-            "supply_ratio": supply_ratio,
-            "ath": ath,
-            "ath_change_pct": ath_change,
-            "ath_gap_pct": ath_gap_pct,
-            "change_24h": change_24h,
-            "change_7d": change_7d,
-            "change_30d": change_30d,
-            "rsi": rsi,
-            "macd": macd_val,
-            "macd_signal": macd_signal,
-            "macd_hist": macd_hist,
-            "bb_low": bb_low,
-            "bb_mid": bb_mid,
-            "bb_high": bb_high,
-            "ema20": ema20_val,
-            "ema50": ema50_val,
-            "fear_greed": fear,
-            "defi": defi,
-            "signal_type": signal_type,
-            "signal_label": signal_label,
-            "signal_score": signal_score,
-            "fresh_score": profile["fresh_score"],
-            "risk_score": risk_score,
-            "risk_flags": risk_flags,
-            "entry_zone": entry_zone,
-            "stop_loss": stop_loss,
-            "tp1": take_profit_1,
-            "tp2": take_profit_2,
-            "tp3": take_profit_3,
-            "chart": (chart or {}).get("prices", []),
-            "sentiment_up": safe_float(market.get("sentiment_votes_up_percentage")),
-            "developer_score": safe_float(market.get("developer_score")),
-            "homepage": next(iter((market.get("links") or {}).get("homepage") or []), ""),
-        }
+        if bb_low and bb_high:
+            stop_loss = round(price * 0.94, 8)
+            tp1 = round(bb_mid, 8)
+            tp2 = round(bb_high, 8)
+            tp3 = round(price * 1.15, 8)
+            entry_zone = f"{fmt_price(price * 0.98)} – {fmt_price(price)}"
+        else:
+            stop_loss = round(price * 0.94, 8)
+            tp1 = round(price * 1.05, 8)
+            tp2 = round(price * 1.10, 8)
+            tp3 = round(price * 1.15, 8)
+            entry_zone = fmt_price(price)
 
-    async def _fetch_feed(self, source: str, url: str) -> list[dict[str, Any]]:
-        raw = await self._get_text(url, headers={"Accept": "application/rss+xml, application/xml, text/xml"})
-        if not raw:
-            return []
-        try:
-            root = ET.fromstring(raw)
-        except ET.ParseError:
-            return []
+        fear_value = fg["value"]
+        fear_emoji = "😱" if fear_value < 25 else "😨" if fear_value < 45 else "😐" if fear_value < 55 else "😊" if fear_value < 75 else "🤑"
 
-        items: list[dict[str, Any]] = []
-        for node in root.findall(".//item")[:10]:
-            title = clean_text(node.findtext("title", ""))
-            link = clean_text(node.findtext("link", ""))
-            pub_date = clean_text(node.findtext("pubDate", ""))
-            description = clean_text(node.findtext("description", ""))[:220]
-            published_at = None
-            if pub_date:
-                try:
-                    published_at = parsedate_to_datetime(pub_date)
-                except (TypeError, ValueError, IndexError):
-                    published_at = None
-            if not title or not link:
-                continue
-            items.append(
-                {
-                    "source": source,
-                    "title": title,
-                    "link": link,
-                    "description": description,
-                    "published_at": published_at.isoformat() if published_at else None,
-                }
-            )
-        return items
-
-    async def get_news_items(self, limit: int = 8) -> list[dict[str, Any]]:
-        results = await asyncio.gather(*[self._fetch_feed(source, url) for source, url in NEWS_FEEDS])
-        flattened = [item for group in results for item in group]
-        deduped: dict[str, dict[str, Any]] = {}
-        for item in flattened:
-            dedupe_key = item["link"] or item["title"]
-            deduped[dedupe_key] = item
-        items = list(deduped.values())
-        items.sort(key=lambda item: item.get("published_at") or "", reverse=True)
-        return items[:limit]
-
-    def _coin_line(self, coin: dict[str, Any]) -> str:
-        flags = []
-        if coin.get("fresh_score", 0) >= 4:
-            flags.append("fresh")
-        if coin.get("risk_score", 0) >= 6:
-            flags.append("risk")
-        flag_text = f" | {'/'.join(flags)}" if flags else ""
-        return (
-            f"*{coin['symbol']}* - {fmt_price(coin['price'])} | "
-            f"24ч {fmt_pct(coin['change_24h'])} | 7д {fmt_pct(coin['change_7d'])} | "
-            f"RSI `{coin['rsi']}` | Cap {fmt_b(coin['market_cap'])} | Vol/Cap {coin['vol_ratio'] * 100:.0f}%{flag_text}"
-        )
-
-    async def full_analysis(self, symbol: str) -> str:
-        try:
-            data = await self.get_coin_dashboard(symbol, chart_days=30)
-        except ValueError:
-            return f"❌ Монета *{symbol.upper()}* не найдена."
-
-        macd_text = (
-            f"`{data['macd']}` / `{data['macd_signal']}` (hist `{data['macd_hist']}`)"
-            if data["macd"] is not None and data["macd_signal"] is not None
-            else "N/A"
-        )
-        bollinger_text = (
-            f"`{fmt_price(data['bb_low'])}` / `{fmt_price(data['bb_mid'])}` / `{fmt_price(data['bb_high'])}`"
-            if data["bb_low"] is not None and data["bb_mid"] is not None and data["bb_high"] is not None
-            else "N/A"
-        )
-        ema_text = (
-            f"`{fmt_price(data['ema20'])}` / `{fmt_price(data['ema50'])}`"
-            if data["ema20"] is not None and data["ema50"] is not None
-            else "N/A"
-        )
-        trend_text = "📈 Бычий" if data["ema20"] and data["ema50"] and data["ema20"] > data["ema50"] else "📉 Медвежий"
-        fear = data["fear_greed"]
-        risk_note = " | ".join(data["risk_flags"][:3]) if data["risk_flags"] else "давление умеренное"
+        macd_text = f"`{macd_val}` (гист: `{macd_hist}`)" if macd_val is not None else "N/A"
+        bb_text = f"`{fmt_price(bb_low)}` / `{fmt_price(bb_mid)}` / `{fmt_price(bb_high)}`" if bb_low else "N/A"
 
         lines = [
-            f"📊 *{data['name']} ({data['symbol']})*",
+            f"📊 *{data['name']} ({symbol.upper()})* — Полный анализ",
             "",
-            f"💰 *Цена:* {fmt_price(data['price'])}",
-            f"📈 *Изменение:* {fmt_pct(data['change_24h'])} (24ч) | {fmt_pct(data['change_7d'])} (7д) | {fmt_pct(data['change_30d'])} (30д)",
-            f"🏦 *Капитализация:* {fmt_b(data['market_cap'])}",
-            f"📦 *Объем 24ч:* {fmt_b(data['volume'])} ({data['vol_ratio'] * 100:.1f}% от капы)",
-            f"🏁 *FDV/MCap:* `{data['fdv_ratio']:.2f}x`",
-            f"🏆 *ATH:* {fmt_price(data['ath'])} ({data['ath_change_pct']:.1f}% от ATH)",
+            f"💰 *Цена:* {fmt_price(price)}",
+            f"📈 *Изменение:* {change_24h:+.2f}% (24ч) | {change_7d:+.2f}% (7д) | {change_30d:+.2f}% (30д)",
+            f"🏦 *Капитализация:* {fmt_b(cap)}",
+            f"📦 *Объём 24ч:* {fmt_b(volume)} ({vol_ratio * 100:.1f}% от кап)",
+            f"🏆 *ATH:* {fmt_price(ath)} (сейчас {ath_change:.1f}%)",
             "",
-            "━━━ ТЕХНИКА ━━━",
-            f"*RSI (14):* `{data['rsi']}` - {rsi_signal(data['rsi'])}",
+            "━━━ ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ━━━",
+            f"*RSI (14):* `{rsi}` — {rsi_signal(rsi)}",
             f"*MACD:* {macd_text}",
-            f"*Bollinger:* {bollinger_text}",
-            f"*EMA 20/50:* {ema_text} - {trend_text if ema_text != 'N/A' else 'N/A'}",
-            "",
-            "━━━ СИГНАЛ ━━━",
-            f"*{data['signal_label']}* - score `{data['signal_score']}/100`",
-            f"_Fresh `{data['fresh_score']}` | Risk `{data['risk_score']}`_",
-            "",
-            "━━━ ПЛАН ━━━",
-            f"🎯 *Зона входа:* {data['entry_zone']}",
-            f"🛑 *Стоп:* {fmt_price(data['stop_loss'])}",
-            f"✅ *TP1:* {fmt_price(data['tp1'])}",
-            f"✅ *TP2:* {fmt_price(data['tp2'])}",
-            f"✅ *TP3:* {fmt_price(data['tp3'])}",
-            "",
-            "━━━ ОНЧЕЙН И НАСТРОЕНИЕ ━━━",
-            f"😐 *Fear & Greed:* `{fear['value']}` - {fear['label']}",
-            f"⚠️ *Риск распределения:* {risk_note}",
+            f"*Bollinger Bands:* {bb_text}",
         ]
 
-        if data["defi"].get("tvl"):
-            tvl_change = safe_float(data["defi"].get("tvl_change"))
-            lines.append(f"🏊 *TVL:* {fmt_b(data['defi']['tvl'])} ({fmt_pct(tvl_change)})")
-        if data["defi"].get("flows") is not None:
-            lines.append(f"📥 *Потоки 7д:* {fmt_b(abs(safe_float(data['defi']['flows'])))}")
-        if data["sentiment_up"]:
-            lines.append(f"💬 *Позитивные голоса:* `{data['sentiment_up']:.0f}%`")
-        if data["developer_score"]:
-            lines.append(f"👨‍💻 *Dev Score:* `{data['developer_score']:.1f}/100`")
-        if data["description"]:
-            lines.append("")
-            lines.append(f"_{data['description'][:180]}..._")
+        if ema20_val and ema50_val:
+            trend = "📈 Бычий" if ema20_val > ema50_val else "📉 Медвежий"
+            lines.append(f"*EMA 20/50:* `{fmt_price(ema20_val)}` / `{fmt_price(ema50_val)}` — {trend}")
+
+        lines += [
+            "",
+            "━━━ ОНЧЕЙН ДАННЫЕ ━━━",
+            f"{fear_emoji} *Fear & Greed:* `{fear_value}` — {fg['label']}",
+        ]
+
+        if defi.get("tvl"):
+            tvl_change = safe_float(defi.get("tvl_change"))
+            tvl_text = f"+{tvl_change:.1f}%" if tvl_change >= 0 else f"{tvl_change:.1f}%"
+            lines.append(f"🏊 *TVL (DeFiLlama):* {fmt_b(defi['tvl'])} ({tvl_text} за 24ч)")
+            if defi.get("flows") is not None:
+                flow_emoji = "📥" if defi["flows"] >= 0 else "📤"
+                lines.append(f"{flow_emoji} *Потоки ликвидности (7д):* {fmt_b(abs(defi['flows']))}")
+
+        sentiment = data.get("sentiment_votes_up_percentage")
+        developer_score = data.get("developer_score")
+        if sentiment:
+            lines.append(f"💬 *Настроение рынка:* `{sentiment:.0f}%` позитивных")
+        if developer_score:
+            lines.append(f"👨‍💻 *Dev Score:* `{developer_score:.1f}/100`")
+
+        lines += [
+            "",
+            "━━━ СИГНАЛ ━━━",
+            f"*{signal_label}*",
+            f"_{signal_desc}_",
+            "",
+            "━━━ ТОЧКИ ━━━",
+            f"🎯 *Зона входа:* {entry_zone}",
+            f"🛑 *Стоп-лосс:* {fmt_price(stop_loss)} (-6%)",
+            f"✅ *TP1:* {fmt_price(tp1)}",
+            f"✅ *TP2:* {fmt_price(tp2)}",
+            f"✅ *TP3:* {fmt_price(tp3)} (+15%)",
+        ]
+
+        if vol_ratio > 0.3:
+            lines.append("\n⚠️ *Аномально высокий объём! Возможна манипуляция.*")
 
         return "\n".join(lines)
 
     async def market_scan(self) -> str:
-        overview = await self.get_market_overview(limit=600)
-        coins = overview["items"]
-        buys = [coin for coin in coins if coin["signal_type"] == "buy" and coin["risk_score"] < 7]
-        sells = [coin for coin in coins if coin["signal_type"] == "sell" or coin["risk_score"] >= 8]
-        buys.sort(key=lambda item: (item["signal_score"], item["fresh_score"]), reverse=True)
-        sells.sort(key=lambda item: (item["risk_score"], item["rsi"]), reverse=True)
+        coins, fg = await asyncio.gather(self._get_market_snapshot(200), self._get_fear_greed())
+        if not coins:
+            return "❌ Ошибка загрузки данных рынка. Попробуй позже."
+
+        ranked = []
+        for coin in coins:
+            signal_type, signal_score = self._coin_signal(coin, fg["value"])
+            ranked.append((coin, signal_type, signal_score))
+
+        buys = sorted(
+            [item for item in ranked if item[0]["change_24h"] > -15],
+            key=lambda item: (item[2], item[0]["change_7d"], item[0]["vol_ratio"]),
+            reverse=True,
+        )[:6]
+        sells = sorted(
+            ranked,
+            key=lambda item: (item[2], item[0]["rsi"], -item[0]["change_24h"]),
+        )[:6]
 
         lines = [
-            f"🔎 *Скан рынка* - покрытие `{len(coins)}` монет",
-            f"😐 *Fear & Greed:* `{overview['fear_greed']['value']}` - {overview['fear_greed']['label']}",
-            "",
-            "🟢 *Лучшие long-идеи:*",
+            f"🔍 *Скан рынка — {len(coins)} монет*",
+            f"😐 *Fear & Greed:* `{fg['value']}` — {fg['label']}\n",
         ]
-        if buys:
-            lines.extend([f"• {self._coin_line(coin)}" for coin in buys[:6]])
-        else:
-            lines.append("• Сильных long-сетапов прямо сейчас немного.")
-        lines += ["", "🔴 *Слабые / под давлением:*"]
-        if sells:
-            lines.extend([f"• {self._coin_line(coin)}" for coin in sells[:6]])
-        else:
-            lines.append("• Явных перекосов вниз сейчас мало.")
-        lines.append("\n_/analyze BTC или /screener fresh для деталей_")
+        lines.append("🟢 *Лучшие кандидаты на рост:*")
+        for coin, signal_type, score in buys:
+            lines.append(
+                f"  ✅ *{coin['symbol']}* — score `{score}` | RSI `{coin['rsi']}` | "
+                f"{coin['change_24h']:+.1f}% | {fmt_price(coin['price'])}"
+            )
+
+        lines.append("")
+        lines.append("🔴 *Монеты под давлением / перегревом:*")
+        for coin, signal_type, score in sells:
+            marker = "❌" if signal_type == "sell" else "⚠️"
+            lines.append(
+                f"  {marker} *{coin['symbol']}* — score `{score}` | RSI `{coin['rsi']}` | "
+                f"{coin['change_24h']:+.1f}% | {fmt_price(coin['price'])}"
+            )
+
+        strong_buys = [item for item in ranked if item[1] == "buy"]
+        strong_sells = [item for item in ranked if item[1] == "sell"]
+        lines += [
+            "",
+            f"📌 Сильных buy-сигналов: `{len(strong_buys)}`",
+            f"📌 Сильных sell-сигналов: `{len(strong_sells)}`",
+            "\n_/analyze SYMBOL для деталей_",
+        ]
         return "\n".join(lines)
 
     async def find_overbought(self) -> str:
-        coins = (await self.get_market_overview(limit=700))["items"]
+        coins = await self._get_market_snapshot(200)
+        if not coins:
+            return "❌ Ошибка загрузки. Попробуй позже."
+
         results = [coin for coin in coins if coin["rsi"] >= 68]
-        results.sort(key=lambda item: (item["rsi"], item["risk_score"], item["vol_ratio"]), reverse=True)
+        results.sort(key=lambda coin: (coin["rsi"], coin["vol_ratio"], coin["change_24h"]), reverse=True)
         if not results:
-            return "✅ Перекупленных монет сейчас почти нет."
+            results = sorted(coins, key=lambda coin: (coin["rsi"], coin["change_24h"]), reverse=True)[:8]
+            lines = [
+                "🟠 *Сильного перегрева не нашлось, но вот лидеры по RSI*\n",
+                "_Это монеты, где риск коррекции сейчас выше среднего._\n",
+            ]
+        else:
+            lines = [
+                f"🔥 *Перекупленные монеты ({len(results)} из {len(coins)})*\n",
+                "_RSI > 68 — высокий риск коррекции_\n",
+            ]
+
+        for coin in results[:10]:
+            risk = " ⚠️ Памп?" if coin["vol_ratio"] > 0.4 else ""
+            lines.append(
+                f"🔴 *{coin['symbol']}* — RSI `{coin['rsi']}` | {coin['change_24h']:+.1f}% | "
+                f"{fmt_price(coin['price'])} | {fmt_b(coin['market_cap'])}{risk}"
+            )
+        lines.append("\n_/analyze SYMBOL для точки выхода_")
+        return "\n".join(lines)
+
+    async def find_new_potential(self) -> str:
+        coins = await self._get_market_snapshot(220)
+        if not coins:
+            return "❌ Ошибка загрузки. Попробуй позже."
+
+        results = []
+        for coin in coins:
+            if coin["market_cap"] < 10_000_000:
+                continue
+
+            score = 0
+            if 20 <= (coin["rank"] or 9999) <= 180:
+                score += 2
+            if coin["market_cap"] >= 100_000_000:
+                score += 1
+            if coin["vol_ratio"] >= 0.14:
+                score += 2
+            elif coin["vol_ratio"] >= 0.08:
+                score += 1
+            if coin["change_24h"] > 4:
+                score += 1
+            if coin["change_7d"] > 8:
+                score += 2
+            elif coin["change_7d"] > 2:
+                score += 1
+            if coin["rsi"] < 66:
+                score += 1
+
+            if score >= 4:
+                results.append({**coin, "score": score})
+
+        results.sort(
+            key=lambda coin: (coin["score"], coin["vol_ratio"], coin["change_7d"], -(coin["rank"] or 9999)),
+            reverse=True,
+        )
+        if not results:
+            return "❌ Ошибка загрузки. Попробуй позже."
 
         lines = [
-            f"🔥 *Перекупленные монеты* ({len(results)} найдено)",
-            "_Высокий RSI и слабое соотношение reward/risk_",
-            "",
+            "🚀 *Монеты с потенциалом роста*\n",
+            "_Критерии: тренд + объём + капитализация_\n",
         ]
         for coin in results[:10]:
-            risk = " | exit-risk" if coin["risk_score"] >= 6 else ""
             lines.append(
-                f"• *{coin['symbol']}* - RSI `{coin['rsi']}` | 24ч {fmt_pct(coin['change_24h'])} | "
-                f"Cap {fmt_b(coin['market_cap'])} | Vol/Cap {coin['vol_ratio'] * 100:.0f}%{risk}"
+                f"✨ *{coin['symbol']}* — {fmt_price(coin['price'])} | {coin['change_24h']:+.1f}% | "
+                f"Кап: {fmt_b(coin['market_cap'])} | Vol: {coin['vol_ratio'] * 100:.0f}% | score `{coin['score']}`"
+            )
+        lines.append("\n_/analyze SYMBOL для анализа_")
+        return "\n".join(lines)
+
+    async def find_dump_risk(self) -> str:
+        coins, fg = await asyncio.gather(self._get_market_snapshot(220), self._get_fear_greed())
+        if not coins:
+            return "❌ Ошибка загрузки. Попробуй позже."
+
+        risks = []
+        for coin in coins:
+            risk_score = 0
+            reasons = []
+            if coin["rsi"] > 74:
+                risk_score += 2
+                reasons.append(f"RSI {coin['rsi']}")
+            if coin["vol_ratio"] > 0.45:
+                risk_score += 2
+                reasons.append(f"Vol/Cap {coin['vol_ratio'] * 100:.0f}%")
+            elif coin["vol_ratio"] > 0.30:
+                risk_score += 1
+            if coin["change_24h"] > 18:
+                risk_score += 2
+                reasons.append(f"Рост {coin['change_24h']:.0f}% за 24ч")
+            elif coin["change_24h"] < -10:
+                risk_score += 1
+                reasons.append(f"Слив {coin['change_24h']:.0f}% за 24ч")
+            if coin["change_7d"] > 35:
+                risk_score += 1
+                reasons.append("Сильный недельный перегрев")
+            if fg["value"] > 75:
+                risk_score += 1
+                reasons.append("Экстремальная жадность")
+
+            if risk_score >= 3:
+                risks.append({**coin, "risk_score": risk_score, "reasons": reasons})
+
+        risks.sort(key=lambda coin: (coin["risk_score"], coin["vol_ratio"], coin["change_24h"]), reverse=True)
+        if not risks:
+            risks = []
+            for coin in coins:
+                risk_score = 0
+                reasons = []
+                if coin["rsi"] > 65:
+                    risk_score += 1
+                    reasons.append(f"RSI {coin['rsi']}")
+                if coin["vol_ratio"] > 0.25:
+                    risk_score += 1
+                    reasons.append(f"Vol/Cap {coin['vol_ratio'] * 100:.0f}%")
+                if coin["change_24h"] > 10:
+                    risk_score += 1
+                    reasons.append(f"Рост {coin['change_24h']:.0f}% за 24ч")
+                if risk_score:
+                    risks.append({**coin, "risk_score": risk_score, "reasons": reasons})
+            risks.sort(key=lambda coin: (coin["risk_score"], coin["change_24h"], coin["vol_ratio"]), reverse=True)
+            header = "🟠 *Зона риска — мягкие сигналы возможной раздачи*"
+        else:
+            header = f"⚠️ *Риск дампа — {len(risks)} монет*"
+
+        lines = [
+            header,
+            f"Fear & Greed: `{fg['value']}` — {fg['label']}\n",
+            "_Высокий RSI + аномальный объём + резкий рост_\n",
+        ]
+        for coin in risks[:8]:
+            lines.append(
+                f"💣 *{coin['symbol']}* — {fmt_price(coin['price'])} | {fmt_b(coin['market_cap'])}\n"
+                f"   _{' | '.join(coin['reasons'])}_"
             )
         lines.append("\n_/analyze SYMBOL для уровней выхода_")
         return "\n".join(lines)
 
-    async def find_new_potential(self) -> str:
-        coins = (await self.get_market_overview(limit=700))["items"]
-        results = [
-            coin
-            for coin in coins
-            if coin["fresh_score"] >= 4
-            and coin["market_cap"] >= 40_000_000
-            and coin["risk_score"] < 8
-        ]
-        results.sort(key=lambda item: (item["opportunity_score"], item["vol_ratio"], item["change_7d"]), reverse=True)
-        if not results:
-            return "⚠️ По свежим монетам сейчас нет сильных сетапов без повышенного риска."
-
-        lines = [
-            "🚀 *Свежие монеты с потенциалом*",
-            "_Смотрю на хайп, объем, капитализацию и то, насколько рынок их уже начал распределять._",
-            "",
-        ]
-        for coin in results[:10]:
-            days = coin["freshness_days"]
-            fresh_text = f"{days}д от локального ATH" if days is not None else "fresh proxy n/a"
-            lines.append(
-                f"• *{coin['symbol']}* - {fmt_price(coin['price'])} | Cap {fmt_b(coin['market_cap'])} | "
-                f"24ч {fmt_pct(coin['change_24h'])} | Vol/Cap {coin['vol_ratio'] * 100:.0f}% | "
-                f"score `{coin['opportunity_score']}` | {fresh_text}"
-            )
-        lines.append("\n_/screener fresh cap_min=50000000 limit=12_")
-        return "\n".join(lines)
-
-    async def find_listing_risk(self) -> str:
-        coins = (await self.get_market_overview(limit=700))["items"]
-        candidates = [
-            coin
-            for coin in coins
-            if coin["market_cap"] >= 50_000_000
-            and coin["fresh_score"] >= 3
-            and coin["risk_score"] >= 5
-        ]
-        candidates.sort(key=lambda item: (item["risk_score"], item["fdv_ratio"], -item["change_24h"]), reverse=True)
-        if not candidates:
-            return "✅ Свежих large-cap монет с явными признаками распределения сейчас не нашел."
-
-        lines = [
-            "🧨 *Свежие large-cap монеты с риском распределения*",
-            "_Ищу новые истории, где капа уже большая, а рынок начинает продавать в ликвидность._",
-            "",
-        ]
-        for coin in candidates[:10]:
-            reasons = ", ".join(coin["risk_flags"][:3]) if coin["risk_flags"] else "повышенная волатильность"
-            lines.append(
-                f"• *{coin['symbol']}* - Cap {fmt_b(coin['market_cap'])} | 24ч {fmt_pct(coin['change_24h'])} | "
-                f"FDV/MCap `{coin['fdv_ratio']:.2f}x` | Vol/Cap {coin['vol_ratio'] * 100:.0f}%\n"
-                f"  _Почему риск: {reasons}_"
-            )
-        lines.append("\n_/analyze SYMBOL чтобы проверить уровни и спрос_")
-        return "\n".join(lines)
-
-    async def find_dump_risk(self) -> str:
-        coins = (await self.get_market_overview(limit=700))["items"]
-        risks = [coin for coin in coins if coin["risk_score"] >= 6]
-        risks.sort(key=lambda item: (item["risk_score"], item["vol_ratio"], -item["change_24h"]), reverse=True)
-        if not risks:
-            return "✅ Монет с ярко выраженным дамп-риском сейчас немного."
-
-        lines = [
-            f"⚠️ *Риск дампа* - `{len(risks)}` монет",
-            "_Высокий объем, перегретость, FDV и признаки распределения._",
-            "",
-        ]
-        for coin in risks[:10]:
-            reasons = " | ".join(coin["risk_flags"][:3]) if coin["risk_flags"] else "сигнал слабее"
-            lines.append(
-                f"• *{coin['symbol']}* - {fmt_price(coin['price'])} | Cap {fmt_b(coin['market_cap'])} | "
-                f"risk `{coin['risk_score']}` | 24ч {fmt_pct(coin['change_24h'])}\n"
-                f"  _{reasons}_"
-            )
-        lines.append("\n_/screener risk limit=12_")
-        return "\n".join(lines)
-
     async def top_signals(self) -> str:
-        coins = (await self.get_market_overview(limit=700))["items"]
-        buys = [coin for coin in coins if coin["signal_type"] == "buy" and coin["risk_score"] < 8]
-        sells = [coin for coin in coins if coin["signal_type"] == "sell" or coin["risk_score"] >= 8]
-        buys.sort(key=lambda item: (item["signal_score"], item["opportunity_score"]), reverse=True)
-        sells.sort(key=lambda item: (item["risk_score"], item["signal_score"]), reverse=True)
+        coins, fg = await asyncio.gather(self._get_market_snapshot(200), self._get_fear_greed())
+        if not coins:
+            return "❌ Ошибка загрузки. Попробуй позже."
 
-        lines = ["📈 *Топ сигналы рынка*", ""]
-        lines.append("🟢 *Buy-side:*")
-        if buys:
-            lines.extend([f"• {self._coin_line(coin)}" for coin in buys[:5]])
-        else:
-            lines.append("• Сильных покупок не видно.")
-        lines += ["", "🔴 *Sell / risk-side:*"]
-        if sells:
-            lines.extend([f"• {self._coin_line(coin)}" for coin in sells[:5]])
-        else:
-            lines.append("• Сильных short/risk сигналов не видно.")
-        return "\n".join(lines)
-
-    async def market_screener(self, filters: Optional[dict[str, str]] = None) -> str:
-        filters = {key.lower(): value for key, value in (filters or {}).items()}
-        preset = filters.get("preset", "smart").lower()
-        universe = int(safe_float(filters.get("universe", 700), 700))
-        limit = max(1, min(20, int(safe_float(filters.get("limit", 8), 8))))
-        coins = (await self.get_market_overview(limit=universe))["items"]
-
-        if preset == "fresh":
-            filters.setdefault("cap_min", "50000000")
-            filters.setdefault("fresh_min", "3")
-            filters.setdefault("risk_max", "8")
-            filters.setdefault("sort", "opportunity")
-        elif preset == "risk":
-            filters.setdefault("risk_min", "6")
-            filters.setdefault("sort", "risk")
-        elif preset == "momentum":
-            filters.setdefault("change_24h_min", "3")
-            filters.setdefault("change_7d_min", "8")
-            filters.setdefault("vol_ratio_min", "0.08")
-            filters.setdefault("sort", "signal")
-        elif preset == "oversold":
-            filters.setdefault("rsi_max", "35")
-            filters.setdefault("sort", "signal")
-
-        def in_range(value: float, min_key: str, max_key: str) -> bool:
-            min_value = filters.get(min_key)
-            max_value = filters.get(max_key)
-            if min_value is not None and value < safe_float(min_value):
-                return False
-            if max_value is not None and value > safe_float(max_value):
-                return False
-            return True
-
-        results: list[dict[str, Any]] = []
+        ranked = []
         for coin in coins:
-            if not in_range(coin["market_cap"], "cap_min", "cap_max"):
-                continue
-            if not in_range(coin["vol_ratio"], "vol_ratio_min", "vol_ratio_max"):
-                continue
-            if not in_range(coin["rsi"], "rsi_min", "rsi_max"):
-                continue
-            if not in_range(coin["change_24h"], "change_24h_min", "change_24h_max"):
-                continue
-            if not in_range(coin["change_7d"], "change_7d_min", "change_7d_max"):
-                continue
-            if not in_range(coin["fdv_ratio"], "fdv_ratio_min", "fdv_ratio_max"):
-                continue
-            if not in_range(coin["risk_score"], "risk_min", "risk_max"):
-                continue
-            if not in_range(coin["fresh_score"], "fresh_min", "fresh_max"):
-                continue
-            rank_max = filters.get("rank_max")
-            if rank_max is not None and coin["rank"] and coin["rank"] > int(safe_float(rank_max)):
-                continue
-            signal = filters.get("signal")
-            if signal and coin["signal_type"] != signal:
-                continue
-            results.append(coin)
+            signal_type, score = self._coin_signal(coin, fg["value"])
+            ranked.append((coin, signal_type, score))
 
-        sort_key = filters.get("sort", "signal").lower()
-        if sort_key == "risk":
-            results.sort(key=lambda item: (item["risk_score"], item["vol_ratio"]), reverse=True)
-        elif sort_key == "volume":
-            results.sort(key=lambda item: (item["vol_ratio"], item["market_cap"]), reverse=True)
-        elif sort_key == "fresh":
-            results.sort(key=lambda item: (item["fresh_score"], item["opportunity_score"]), reverse=True)
-        elif sort_key == "opportunity":
-            results.sort(key=lambda item: (item["opportunity_score"], item["signal_score"]), reverse=True)
-        elif sort_key == "cap":
-            results.sort(key=lambda item: item["market_cap"], reverse=True)
-        else:
-            results.sort(key=lambda item: (item["signal_score"], item["fresh_score"]), reverse=True)
-
-        if not results:
-            return "🔎 По этим фильтрам ничего не нашлось. Ослабь условия и попробуй еще раз."
+        buys = sorted(
+            ranked,
+            key=lambda item: (item[2], item[0]["change_7d"], item[0]["vol_ratio"]),
+            reverse=True,
+        )[:6]
+        sells = sorted(
+            ranked,
+            key=lambda item: (item[2], item[0]["rsi"], -item[0]["change_24h"]),
+        )[:6]
 
         lines = [
-            f"🧰 *Скринер* - preset `{preset}` | найдено `{len(results)}`",
-            f"_Universe {universe} монет | sort `{sort_key}`_",
-            "",
+            "📈 *Топ сигналы рынка*",
+            f"😐 Fear & Greed: `{fg['value']}` — {fg['label']}\n",
+            "🟢 *Кандидаты на рост:*",
         ]
-        for coin in results[:limit]:
-            lines.append(f"• {self._coin_line(coin)}")
-        lines.append("")
-        lines.append("Пример: `/screener fresh cap_min=50000000 risk_max=7 limit=10`")
-        return "\n".join(lines)
+        for coin, signal_type, score in buys:
+            marker = "✅" if signal_type == "buy" else "🟡"
+            lines.append(
+                f"  {marker} *{coin['symbol']}* — score `{score}` | RSI `{coin['rsi']}` | "
+                f"{coin['change_24h']:+.1f}% | {fmt_price(coin['price'])}"
+            )
 
-    async def latest_news(self, limit: int = 6) -> str:
-        items = await self.get_news_items(limit=limit)
-        if not items:
-            return "📰 Не получилось подтянуть новости. Проверь сеть на Railway и попробуй позже."
+        lines.append("\n🔴 *Кандидаты на падение / фиксацию:*")
+        for coin, signal_type, score in sells:
+            marker = "❌" if signal_type == "sell" else "⚠️"
+            lines.append(
+                f"  {marker} *{coin['symbol']}* — score `{score}` | RSI `{coin['rsi']}` | "
+                f"{coin['change_24h']:+.1f}% | {fmt_price(coin['price'])}"
+            )
 
-        lines = ["📰 *Крипто-лента*", ""]
-        for item in items:
-            source = item["source"]
-            title = item["title"]
-            link = item["link"]
-            lines.append(f"• *{source}* - [{title}]({link})")
-        lines.append("\n_Лента собрана из открытых RSS-источников._")
+        lines.append("\n_/analyze SYMBOL для деталей_")
         return "\n".join(lines)

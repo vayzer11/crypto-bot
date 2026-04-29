@@ -1,115 +1,122 @@
 """
-alerts.py - lightweight in-memory alert manager.
-
-For production persistence, move alerts to Redis/Postgres.
+alerts.py — Система алертов
+Хранит алерты пользователей в памяти и проверяет их по расписанию.
+Для продакшена замени на Redis или SQLite.
 """
 
-from __future__ import annotations
-
-import os
-from typing import TYPE_CHECKING, Any
-
 import aiohttp
+import os
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from analysis import CryptoAnalyzer
 
-COINGECKO_BASE = (
-    "https://pro-api.coingecko.com/api/v3"
-    if os.getenv("COINGECKO_USE_PRO", "").lower() in {"1", "true", "yes"}
-    else "https://api.coingecko.com/api/v3"
-)
+COINGECKO = "https://api.coingecko.com/api/v3"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
 
 class AlertManager:
-    def __init__(self) -> None:
-        self._alerts: dict[int, list[dict[str, Any]]] = {}
+    def __init__(self):
+        # {user_id: [{"symbol": str, "price": float, "direction": str}]}
+        self._alerts: dict[int, list] = {}
 
-    def add_alert(self, user_id: int, symbol: str, price: float, direction: str = "above") -> None:
-        self._alerts.setdefault(user_id, []).append(
-            {
-                "symbol": symbol.upper(),
-                "price": price,
-                "direction": direction,
-            }
-        )
+    def add_alert(self, user_id: int, symbol: str, price: float, direction: str = "above"):
+        if user_id not in self._alerts:
+            self._alerts[user_id] = []
+        self._alerts[user_id].append({
+            "symbol": symbol.upper(),
+            "price": price,
+            "direction": direction
+        })
 
-    def remove_alert(self, user_id: int, index: int) -> bool:
+    def remove_alert(self, user_id: int, idx: int) -> bool:
         alerts = self._alerts.get(user_id, [])
-        if 0 <= index < len(alerts):
-            alerts.pop(index)
+        if 0 <= idx < len(alerts):
+            alerts.pop(idx)
             return True
         return False
 
-    def get_user_alerts(self, user_id: int) -> list[dict[str, Any]]:
+    def get_user_alerts(self, user_id: int) -> list:
         return self._alerts.get(user_id, [])
 
-    def _request_headers(self) -> dict[str, str]:
-        headers = {"User-Agent": "CryptoSignalBot/2.0"}
-        if COINGECKO_API_KEY:
-            key_header = "x-cg-pro-api-key" if "pro-api" in COINGECKO_BASE else "x-cg-demo-api-key"
-            headers[key_header] = COINGECKO_API_KEY
-        return headers
-
-    async def check_alerts(self, analyzer: "CryptoAnalyzer") -> list[tuple[int, str]]:
+    async def check_alerts(self, analyzer: "CryptoAnalyzer") -> list[tuple]:
+        """
+        Проверяет все алерты. Возвращает список (user_id, message) для сработавших.
+        Срабатавшие алерты удаляются.
+        """
         if not self._alerts:
             return []
 
-        from analysis import SYMBOL_MAP
+        # Собираем уникальные символы
+        symbols = set()
+        for alerts in self._alerts.values():
+            for a in alerts:
+                symbols.add(a["symbol"])
 
-        symbols = sorted({alert["symbol"] for alerts in self._alerts.values() for alert in alerts})
-        ids = [SYMBOL_MAP.get(symbol, symbol.lower()) for symbol in symbols]
-        prices = await self._fetch_prices(symbols, ids)
+        # Получаем текущие цены
+        prices = await self._fetch_prices(list(symbols), analyzer)
         if not prices:
             return []
 
-        triggered: list[tuple[int, str]] = []
+        triggered = []
         for user_id, alerts in list(self._alerts.items()):
             remaining = []
-            for alert in alerts:
-                current = prices.get(alert["symbol"])
+            for a in alerts:
+                current = prices.get(a["symbol"])
                 if current is None:
-                    remaining.append(alert)
+                    remaining.append(a)
                     continue
                 fired = (
-                    (alert["direction"] == "above" and current >= alert["price"])
-                    or (alert["direction"] == "below" and current <= alert["price"])
+                    (a["direction"] == "above" and current >= a["price"]) or
+                    (a["direction"] == "below" and current <= a["price"])
                 )
-                if not fired:
-                    remaining.append(alert)
-                    continue
-
-                direction_symbol = "≥" if alert["direction"] == "above" else "≤"
-                message = (
-                    "🔔 *Алерт сработал!*\n\n"
-                    f"*{alert['symbol']}* достиг {current:,.4f}$\n"
-                    f"Условие: {direction_symbol} ${alert['price']:,.4f}\n\n"
-                    f"_/analyze {alert['symbol']}_"
-                )
-                triggered.append((user_id, message))
+                if fired:
+                    dir_sym = "≥" if a["direction"] == "above" else "≤"
+                    msg = (
+                        f"🔔 *Алерт сработал!*\n\n"
+                        f"*{a['symbol']}* достиг ${current:,.4f}\n"
+                        f"Условие: {dir_sym} ${a['price']:,.4f}\n\n"
+                        f"_/analyze {a['symbol']} — посмотреть сигнал_"
+                    )
+                    triggered.append((user_id, msg))
+                else:
+                    remaining.append(a)
             self._alerts[user_id] = remaining
 
         return triggered
 
-    async def _fetch_prices(self, symbols: list[str], ids: list[str]) -> dict[str, float]:
-        try:
-            async with aiohttp.ClientSession(
-                headers=self._request_headers(),
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as session:
-                async with session.get(
-                    f"{COINGECKO_BASE}/simple/price",
-                    params={"ids": ",".join(ids), "vs_currencies": "usd"},
-                ) as response:
-                    if response.status != 200:
-                        return {}
-                    data = await response.json()
-        except Exception:
-            return {}
+    async def _fetch_prices(self, symbols: list[str], analyzer: "CryptoAnalyzer") -> dict:
+        """Получить текущие цены по символам через CoinGecko"""
+        from analysis import SYMBOL_MAP
 
-        result: dict[str, float] = {}
-        for symbol, coin_id in zip(symbols, ids):
-            if coin_id in data and "usd" in data[coin_id]:
-                result[symbol] = float(data[coin_id]["usd"])
-        return result
+        prices = {}
+        snapshot = await analyzer._get_market_snapshot(250)
+        for coin in snapshot:
+            if coin.get("symbol") in symbols:
+                prices[coin["symbol"]] = coin["price"]
+
+        missing = [symbol for symbol in symbols if symbol not in prices]
+        if not missing:
+            return prices
+
+        ids = [SYMBOL_MAP.get(s, s.lower()) for s in missing]
+        ids_str = ",".join(ids)
+        headers = {"User-Agent": "CryptoSignalBot/1.1"}
+        if COINGECKO_API_KEY:
+            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(
+                    f"{COINGECKO}/simple/price",
+                    params={"ids": ids_str, "vs_currencies": "usd"},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as r:
+                    if r.status != 200:
+                        return prices
+                    data = await r.json()
+                    for sym, coin_id in zip(missing, ids):
+                        if coin_id in data:
+                            prices[sym] = data[coin_id]["usd"]
+                    return prices
+        except Exception:
+            return prices
