@@ -492,7 +492,7 @@ async function fetchMarket() {
   }
   try {
     const data = await requestJson(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&price_change_percentage=1h,24h,7d',
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&price_change_percentage=1h,24h,7d',
       {cacheKey: CACHE_KEYS.market, maxAge: CACHE_TTL.market}
     );
     applyMarketData(data);
@@ -1017,8 +1017,8 @@ function checkAlerts() {
 if (window.Telegram?.WebApp) { Telegram.WebApp.ready(); Telegram.WebApp.expand(); }
 fetchMarket();
 fetchFearGreed();
-setInterval(fetchMarket,300000);
-setInterval(fetchFearGreed,300000);
+setInterval(fetchMarket, 60000);
+setInterval(fetchFearGreed, 600000);
 setInterval(()=>{renderPortfolio();checkAlerts();},60000);
 </script>
 </body>
