@@ -514,24 +514,3 @@ async def fallback_handler(message: Message) -> None:
         "Команда не распознана.\nИспользуй: `/start`, `/stop`, `/status`, `/filters`, `/check`",
         parse_mode="Markdown",
     )
-
-
-async def main() -> None:
-    ensure_users_file()
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
-
-    bot = Bot(token=BOT_TOKEN)
-    logger.info("Sniper bot запущен")
-    asyncio.create_task(scanner_loop(bot))
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Sniper bot остановлен вручную")
-    except Exception as exc:
-        logger.error("Критическая ошибка sniper bot: %s", exc)
-        raise SystemExit(1)
