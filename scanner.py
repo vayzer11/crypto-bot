@@ -1,13 +1,14 @@
 """
 scanner.py
-Реалтайм-сканер новых токенов для ETH/Solana через бесплатные API.
+Поиск свежих memecoin-кандидатов (x1000 strategy) через бесплатные API.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
+import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,30 +16,28 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-DEXSCREENER_API = "https://api.dexscreener.com/latest/dex"
-GECKO_TERMINAL = "https://api.geckoterminal.com/api/v2"
+DEX_TOKEN_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1"
+DEX_RECENT_PAIRS = "https://api.dexscreener.com/latest/dex/tokens/recently-added"
+GECKO_BASE = "https://api.geckoterminal.com/api/v2"
 
 BASE_DIR = Path(__file__).resolve().parent
 SEEN_TOKENS_FILE = BASE_DIR / "seen_tokens.json"
 
-DEFAULT_FILTERS = {
-    "min_liquidity": 10_000,
-    "max_liquidity": 2_000_000,
-    "min_volume_24h": 5_000,
-    "max_age_hours": 24,
-    "min_safety_score": 40,
-    "min_holders": 20,
-    "max_buy_tax": 10,
-    "max_sell_tax": 10,
-    "chains": ["ethereum", "solana"],
-    "exclude_honeypots": True,
+MEME_KEYWORDS = {
+    "pepe", "doge", "shib", "cat", "dog", "frog", "moon", "elon", "trump", "maga", "chad",
+    "based", "wojak", "ape", "baby", "inu", "floki", "bonk", "wif", "popcat", "pnut",
+    "goat", "turbo", "mog", "brett", "neiro", "act", "banana", "pizza", "burger",
 }
 
-CHAIN_ALIASES = {
-    "eth": "ethereum",
-    "ethereum": "ethereum",
-    "sol": "solana",
-    "solana": "solana",
+DEFAULT_FILTERS = {
+    "max_age_hours": 12.0,
+    "min_liquidity": 5_000.0,
+    "max_liquidity": 500_000.0,
+    "min_vol_liq_ratio": 0.5,
+    "chains": {"ethereum", "solana"},
+    "max_buy_tax": 5.0,
+    "max_sell_tax": 5.0,
+    "min_score": 50,
 }
 
 
@@ -60,6 +59,32 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _chain_normalize(value: str) -> str:
+    text = (value or "").strip().lower()
+    if text in {"eth", "ethereum"}:
+        return "ethereum"
+    if text in {"sol", "solana"}:
+        return "solana"
+    return text
+
+
+def _parse_iso_to_hours(iso_text: str | None) -> float:
+    if not iso_text:
+        return 999.0
+    try:
+        stamp = datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
+        return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds() / 3600)
+    except Exception:
+        return 999.0
+
+
+def _is_memecoin(name: str, symbol: str, market_cap: float) -> bool:
+    hay = f"{name} {symbol}".lower()
+    if market_cap > 0 and market_cap < 1_000_000:
+        return True
+    return any(word in hay for word in MEME_KEYWORDS)
+
+
 def ensure_seen_tokens_file() -> None:
     if not SEEN_TOKENS_FILE.exists():
         SEEN_TOKENS_FILE.write_text("[]", encoding="utf-8")
@@ -68,11 +93,11 @@ def ensure_seen_tokens_file() -> None:
 def load_seen_tokens() -> set[str]:
     ensure_seen_tokens_file()
     try:
-        raw = json.loads(SEEN_TOKENS_FILE.read_text(encoding="utf-8"))
-        if isinstance(raw, list):
-            return {str(x).strip().lower() for x in raw if str(x).strip()}
+        data = json.loads(SEEN_TOKENS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(item).strip().lower() for item in data if str(item).strip()}
     except Exception as exc:
-        logger.error("Не удалось загрузить seen_tokens.json: %s", exc)
+        logger.error("Ошибка загрузки seen_tokens.json: %s", exc)
     return set()
 
 
@@ -83,226 +108,275 @@ def save_seen_tokens(seen_tokens: set[str]) -> None:
             encoding="utf-8",
         )
     except Exception as exc:
-        logger.error("Не удалось сохранить seen_tokens.json: %s", exc)
+        logger.error("Ошибка сохранения seen_tokens.json: %s", exc)
 
 
-def normalize_chain(chain: str) -> str:
-    return CHAIN_ALIASES.get((chain or "").lower(), (chain or "").lower())
+def token_uid(chain: str, contract: str) -> str:
+    return f"{_chain_normalize(chain)}:{(contract or '').strip().lower()}"
 
 
-def _token_uid(chain: str, contract: str) -> str:
-    return f"{normalize_chain(chain)}:{(contract or '').lower()}"
+def calculate_x1000_score(token: dict[str, Any], security: dict[str, Any]) -> int:
+    score = 0
+    mcap = _safe_float(token.get("market_cap"))
+    age_h = _safe_float(token.get("age_hours"), 999.0)
+    ratio = _safe_float(token.get("vol_liq_ratio"))
+    buys = _safe_int(token.get("buys_1h"))
+    sells = _safe_int(token.get("sells_1h"))
+    liq_change = _safe_float(token.get("liquidity_change_1h"))
+    sell_tax = _safe_float(security.get("sell_tax"))
+    buy_tax = _safe_float(security.get("buy_tax"))
+    is_honeypot = bool(security.get("is_honeypot"))
+
+    if mcap < 100_000:
+        score += 40
+    elif mcap < 500_000:
+        score += 30
+    elif mcap < 1_000_000:
+        score += 20
+
+    if age_h < 1:
+        score += 25
+    elif age_h < 6:
+        score += 20
+    elif age_h < 12:
+        score += 15
+
+    if ratio > 3:
+        score += 30
+    elif ratio > 1:
+        score += 20
+    elif ratio > 0.5:
+        score += 10
+
+    if buys > sells * 2:
+        score += 20
+    elif buys > sells:
+        score += 10
+
+    if liq_change > 0:
+        score += 15
+
+    if sell_tax > 3:
+        score -= 30
+    if buy_tax > 3:
+        score -= 20
+    if is_honeypot:
+        score -= 40
+
+    return max(0, min(100, score))
 
 
-def passes_filters(token: dict[str, Any], filters: dict[str, Any] | None = None) -> bool:
-    active_filters = {**DEFAULT_FILTERS, **(filters or {})}
-    chain = normalize_chain(str(token.get("chain", "")))
-    liquidity = _safe_float(token.get("liquidity"))
-    volume_24h = _safe_float(token.get("volume_24h"))
-    age_hours = _safe_float(token.get("age_hours"), default=999.0)
-
-    if chain not in active_filters["chains"]:
-        return False
-    if liquidity < active_filters["min_liquidity"]:
-        return False
-    if liquidity > active_filters["max_liquidity"]:
-        return False
-    if volume_24h < active_filters["min_volume_24h"]:
-        return False
-    if age_hours > active_filters["max_age_hours"]:
-        return False
-    if not token.get("contract"):
-        return False
-    if token.get("price") is None:
-        return False
-    return True
-
-
-class TokenScanner:
+class MemecoinScanner:
     def __init__(self, filters: dict[str, Any] | None = None) -> None:
         self.filters = {**DEFAULT_FILTERS, **(filters or {})}
 
-    async def _get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
+    async def _get_json(self, url: str) -> Any:
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, params=params) as response:
+                async with session.get(url) as response:
                     if response.status != 200:
-                        logger.warning("HTTP %s для %s", response.status, url)
+                        logger.warning("HTTP %s (%s)", response.status, url)
                         return None
                     return await response.json()
         except Exception as exc:
             logger.error("Ошибка запроса %s: %s", url, exc)
             return None
 
-    def _build_token_from_dex(self, pair: dict[str, Any]) -> dict[str, Any] | None:
-        chain = normalize_chain(str(pair.get("chainId", "")))
-        if chain not in {"ethereum", "solana"}:
+    def _normalize_dex_pair(self, pair: dict[str, Any]) -> dict[str, Any] | None:
+        chain = _chain_normalize(str(pair.get("chainId", "")))
+        if chain not in self.filters["chains"]:
             return None
 
-        base_token = pair.get("baseToken") or {}
-        contract = str(base_token.get("address") or "").strip()
+        base = pair.get("baseToken") or {}
+        contract = str(base.get("address") or "").strip()
         if not contract:
             return None
 
-        created_at_ms = _safe_int(pair.get("pairCreatedAt"))
-        now_ms = int(time.time() * 1000)
-        if created_at_ms > 0 and created_at_ms <= now_ms:
-            age_hours = (now_ms - created_at_ms) / 3_600_000
-        else:
-            age_hours = 999.0
+        created_ms = _safe_int(pair.get("pairCreatedAt"))
+        age_hours = 999.0
+        if created_ms > 0:
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            age_hours = max(0.0, (now_ms - created_ms) / 3_600_000)
 
+        liq = _safe_float((pair.get("liquidity") or {}).get("usd"))
+        vol_24 = _safe_float((pair.get("volume") or {}).get("h24"))
+        vol_1 = _safe_float((pair.get("volume") or {}).get("h1"))
         price = _safe_float(pair.get("priceUsd"))
-        change_1h = _safe_float((pair.get("priceChange") or {}).get("h1"))
-        change_24h = _safe_float((pair.get("priceChange") or {}).get("h24"))
-        price_high_24h = price * (1 + max(change_24h, 0) / 100)
-        price_low_24h = price * (1 - max(-change_24h, 0) / 100)
-        if price_high_24h <= 0:
-            price_high_24h = price
-        if price_low_24h <= 0:
-            price_low_24h = price * 0.95
-
-        liquidity = _safe_float((pair.get("liquidity") or {}).get("usd"))
-        volume_24h = _safe_float((pair.get("volume") or {}).get("h24"))
-        market_cap = _safe_float(pair.get("marketCap") or pair.get("fdv"))
-        txns = pair.get("txns") or {}
-        txns_24h = _safe_int((txns.get("h24") or {}).get("buys")) + _safe_int((txns.get("h24") or {}).get("sells"))
+        price_change_1h = _safe_float((pair.get("priceChange") or {}).get("h1"))
+        high = price * (1 + max(price_change_1h, 0) / 100)
+        low = price * (1 - max(-price_change_1h, 0) / 100)
+        txns_h1 = (pair.get("txns") or {}).get("h1") or {}
 
         return {
-            "name": str(base_token.get("name") or "Unknown"),
-            "symbol": str(base_token.get("symbol") or "UNK"),
+            "source": "dexscreener",
+            "name": str(base.get("name") or "Unknown"),
+            "symbol": str(base.get("symbol") or "UNK").upper(),
             "chain": chain,
             "contract": contract,
             "pair_address": str(pair.get("pairAddress") or ""),
+            "dex_url": f"https://dexscreener.com/{chain}/{contract}",
             "age_hours": age_hours,
             "price": price,
-            "market_cap": market_cap,
-            "liquidity": liquidity,
-            "volume_24h": volume_24h,
-            "vol_liq_ratio": (volume_24h / liquidity) if liquidity > 0 else 0.0,
-            "price_change_1h": change_1h,
-            "price_change_24h": change_24h,
-            "txns_24h": txns_24h,
-            "buys_24h": _safe_int((txns.get("h24") or {}).get("buys")),
-            "sells_24h": _safe_int((txns.get("h24") or {}).get("sells")),
-            "price_high_24h": max(price_high_24h, price),
-            "price_low_24h": min(price_low_24h, price),
-            "source": "dexscreener",
+            "market_cap": _safe_float(pair.get("marketCap") or pair.get("fdv")),
+            "liquidity": liq,
+            "volume_1h": vol_1,
+            "volume_24h": vol_24,
+            "vol_liq_ratio": (vol_1 / liq) if liq > 0 else 0.0,
+            "buys_1h": _safe_int(txns_h1.get("buys")),
+            "sells_1h": _safe_int(txns_h1.get("sells")),
+            "liquidity_change_1h": _safe_float((pair.get("liquidity") or {}).get("usd_change_h1")),
+            "price_high_1h": max(high, price),
+            "price_low_1h": min(low, price if price > 0 else low),
         }
 
-    async def get_new_pairs(self) -> list[dict[str, Any]]:
+    def _normalize_gecko_pool(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        attrs = row.get("attributes") or {}
+        chain = _chain_normalize(str(attrs.get("network") or attrs.get("network_slug") or ""))
+        if chain not in self.filters["chains"]:
+            return None
+
+        pool_addr = str(attrs.get("address") or "")
+        base_token = attrs.get("base_token") or {}
+        contract = str(base_token.get("address") or "")
+        if not contract:
+            pair_id = str(row.get("id") or "")
+            if "_" in pair_id:
+                contract = pair_id.split("_", 1)[1]
+        if not contract:
+            return None
+
+        liq = _safe_float(attrs.get("reserve_in_usd"))
+        vol_1 = _safe_float((attrs.get("volume_usd") or {}).get("h1"))
+        vol_24 = _safe_float((attrs.get("volume_usd") or {}).get("h24"))
+        tx_h1 = (attrs.get("transactions") or {}).get("h1") or {}
+        price = _safe_float(attrs.get("base_token_price_usd"))
+        price_change_1h = _safe_float((attrs.get("price_change_percentage") or {}).get("h1"))
+        high = price * (1 + max(price_change_1h, 0) / 100)
+        low = price * (1 - max(-price_change_1h, 0) / 100)
+
+        return {
+            "source": "geckoterminal",
+            "name": str(attrs.get("base_token_name") or attrs.get("name") or "Unknown"),
+            "symbol": str(attrs.get("base_token_symbol") or "UNK").upper(),
+            "chain": chain,
+            "contract": contract,
+            "pair_address": pool_addr,
+            "dex_url": f"https://dexscreener.com/{chain}/{contract}",
+            "age_hours": _parse_iso_to_hours(attrs.get("pool_created_at")),
+            "price": price,
+            "market_cap": _safe_float(attrs.get("market_cap_usd") or attrs.get("fdv_usd")),
+            "liquidity": liq,
+            "volume_1h": vol_1,
+            "volume_24h": vol_24,
+            "vol_liq_ratio": (vol_1 / liq) if liq > 0 else 0.0,
+            "buys_1h": _safe_int(tx_h1.get("buys")),
+            "sells_1h": _safe_int(tx_h1.get("sells")),
+            "liquidity_change_1h": _safe_float(attrs.get("reserve_in_usd_change_1h")),
+            "price_high_1h": max(high, price),
+            "price_low_1h": min(low, price if price > 0 else low),
+        }
+
+    async def fetch_sources(self) -> list[dict[str, Any]]:
         urls = [
-            f"{DEXSCREENER_API}/tokens/recently-added",
-            f"{DEXSCREENER_API}/search",
+            DEX_TOKEN_PROFILES,
+            DEX_RECENT_PAIRS,
+            f"{GECKO_BASE}/networks/eth/new_pools",
+            f"{GECKO_BASE}/networks/solana/new_pools",
         ]
-        params = [None, {"q": "new"}]
+        payloads = await asyncio.gather(*(self._get_json(url) for url in urls))
         out: list[dict[str, Any]] = []
 
-        for url, query in zip(urls, params, strict=False):
-            data = await self._get_json(url, params=query)
-            pairs = (data or {}).get("pairs", []) if isinstance(data, dict) else []
-            for pair in pairs:
-                token = self._build_token_from_dex(pair)
-                if token:
-                    out.append(token)
-
-        return out
-
-    async def _gecko_fetch(self, endpoint: str) -> list[dict[str, Any]]:
-        url = f"{GECKO_TERMINAL}{endpoint}"
-        data = await self._get_json(url)
-        rows = (data or {}).get("data", []) if isinstance(data, dict) else []
-        tokens: list[dict[str, Any]] = []
-
-        for row in rows:
-            attrs = row.get("attributes") or {}
-            chain = normalize_chain(str(attrs.get("network") or attrs.get("network_slug") or ""))
-            if chain not in {"ethereum", "solana"}:
+        # Dex token profiles
+        profiles = payloads[0] if isinstance(payloads[0], list) else []
+        for item in profiles:
+            chain = _chain_normalize(str(item.get("chainId") or ""))
+            contract = str(item.get("tokenAddress") or item.get("address") or "").strip()
+            if chain not in self.filters["chains"] or not contract:
                 continue
-
-            pair_id = str(row.get("id") or "")
-            # Пример id: "eth_0xabc..." или "solana_xxx"
-            contract = pair_id.split("_", 1)[1] if "_" in pair_id else pair_id
-            if not contract:
-                continue
-
-            created_at = attrs.get("pool_created_at")
-            age_hours = 999.0
-            if created_at:
-                try:
-                    created_ts = int(
-                        time.mktime(time.strptime(str(created_at).split(".")[0], "%Y-%m-%dT%H:%M:%S"))
-                    )
-                    age_hours = max(0.0, (time.time() - created_ts) / 3600)
-                except Exception:
-                    pass
-
-            price = _safe_float(attrs.get("base_token_price_usd"))
-            change_24h = _safe_float((attrs.get("price_change_percentage") or {}).get("h24"))
-            high = price * (1 + max(change_24h, 0) / 100)
-            low = price * (1 - max(-change_24h, 0) / 100)
-            liq = _safe_float(attrs.get("reserve_in_usd"))
-            vol = _safe_float((attrs.get("volume_usd") or {}).get("h24"))
-            txns = attrs.get("transactions") or {}
-            buys = _safe_int((txns.get("h24") or {}).get("buys"))
-            sells = _safe_int((txns.get("h24") or {}).get("sells"))
-
-            tokens.append(
+            out.append(
                 {
-                    "name": str(attrs.get("name") or attrs.get("base_token_name") or "Unknown"),
-                    "symbol": str(attrs.get("base_token_symbol") or "UNK"),
+                    "source": "dex_token_profiles",
+                    "name": str(item.get("tokenName") or item.get("name") or "Unknown"),
+                    "symbol": str(item.get("tokenSymbol") or item.get("symbol") or "UNK").upper(),
                     "chain": chain,
                     "contract": contract,
-                    "pair_address": pair_id,
-                    "age_hours": age_hours,
-                    "price": price,
-                    "market_cap": _safe_float(attrs.get("fdv_usd") or attrs.get("market_cap_usd")),
-                    "liquidity": liq,
-                    "volume_24h": vol,
-                    "vol_liq_ratio": (vol / liq) if liq > 0 else 0.0,
-                    "price_change_1h": _safe_float((attrs.get("price_change_percentage") or {}).get("h1")),
-                    "price_change_24h": change_24h,
-                    "txns_24h": buys + sells,
-                    "buys_24h": buys,
-                    "sells_24h": sells,
-                    "price_high_24h": max(high, price),
-                    "price_low_24h": min(low, price if price > 0 else low),
-                    "source": "geckoterminal",
+                    "pair_address": "",
+                    "dex_url": f"https://dexscreener.com/{chain}/{contract}",
+                    "age_hours": 999.0,
+                    "price": 0.0,
+                    "market_cap": 0.0,
+                    "liquidity": 0.0,
+                    "volume_1h": 0.0,
+                    "volume_24h": 0.0,
+                    "vol_liq_ratio": 0.0,
+                    "buys_1h": 0,
+                    "sells_1h": 0,
+                    "liquidity_change_1h": 0.0,
+                    "price_high_1h": 0.0,
+                    "price_low_1h": 0.0,
                 }
             )
 
-        return tokens
+        # Dex recent pairs
+        recent_pairs = (payloads[1] or {}).get("pairs", []) if isinstance(payloads[1], dict) else []
+        for pair in recent_pairs:
+            normalized = self._normalize_dex_pair(pair)
+            if normalized:
+                out.append(normalized)
 
-    async def get_trending_pools(self) -> list[dict[str, Any]]:
-        eth = await self._gecko_fetch("/networks/eth/trending_pools")
-        sol = await self._gecko_fetch("/networks/solana/trending_pools")
-        return eth + sol
+        # Gecko pools eth/sol
+        for idx in (2, 3):
+            rows = (payloads[idx] or {}).get("data", []) if isinstance(payloads[idx], dict) else []
+            for row in rows:
+                normalized = self._normalize_gecko_pool(row)
+                if normalized:
+                    out.append(normalized)
 
-    async def get_new_pools_eth(self) -> list[dict[str, Any]]:
-        return await self._gecko_fetch("/networks/eth/new_pools")
+        return out
 
-    async def get_new_pools_solana(self) -> list[dict[str, Any]]:
-        return await self._gecko_fetch("/networks/solana/new_pools")
-
-    async def get_candidates(self, seen_tokens: set[str]) -> list[dict[str, Any]]:
-        candidates: list[dict[str, Any]] = []
-        dex_pairs = await self.get_new_pairs()
-        gecko_trending = await self.get_trending_pools()
-        gecko_new_eth = await self.get_new_pools_eth()
-        gecko_new_sol = await self.get_new_pools_solana()
-        all_tokens = dex_pairs + gecko_trending + gecko_new_eth + gecko_new_sol
-
-        dedup: dict[str, dict[str, Any]] = {}
-        for token in all_tokens:
-            uid = _token_uid(token.get("chain", ""), token.get("contract", ""))
-            if not uid or uid in seen_tokens:
+    def _merge_best(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            uid = token_uid(row.get("chain", ""), row.get("contract", ""))
+            if not uid:
                 continue
-            if not passes_filters(token, self.filters):
+            prev = merged.get(uid)
+            if not prev:
+                merged[uid] = row
                 continue
-            existing = dedup.get(uid)
-            if existing is None or token.get("volume_24h", 0) > existing.get("volume_24h", 0):
-                dedup[uid] = token
+            # Берем запись с более полной ликвидностью/объёмом.
+            prev_quality = _safe_float(prev.get("liquidity")) + _safe_float(prev.get("volume_1h"))
+            row_quality = _safe_float(row.get("liquidity")) + _safe_float(row.get("volume_1h"))
+            if row_quality > prev_quality:
+                merged[uid] = row
+        return list(merged.values())
 
-        candidates.extend(dedup.values())
-        candidates.sort(key=lambda item: item.get("volume_24h", 0), reverse=True)
-        return candidates
+    def prefilter_memecoins(self, rows: list[dict[str, Any]], seen_tokens: set[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for token in self._merge_best(rows):
+            uid = token_uid(token.get("chain", ""), token.get("contract", ""))
+            if uid in seen_tokens:
+                continue
+
+            age = _safe_float(token.get("age_hours"), 999.0)
+            liq = _safe_float(token.get("liquidity"))
+            ratio = _safe_float(token.get("vol_liq_ratio"))
+            buys = _safe_int(token.get("buys_1h"))
+            sells = _safe_int(token.get("sells_1h"))
+            cap = _safe_float(token.get("market_cap"))
+
+            if token.get("chain") not in self.filters["chains"]:
+                continue
+            if age > self.filters["max_age_hours"]:
+                continue
+            if liq < self.filters["min_liquidity"] or liq > self.filters["max_liquidity"]:
+                continue
+            if ratio <= self.filters["min_vol_liq_ratio"]:
+                continue
+            if buys <= sells:
+                continue
+            if not _is_memecoin(str(token.get("name", "")), str(token.get("symbol", "")), cap):
+                continue
+            out.append(token)
+        return out

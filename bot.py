@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
 from alerts import AlertManager
-from sniper import scanner_loop
+from sniper import scanner_loop, get_sniper_status_text
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -188,6 +188,12 @@ async def delalert_command(message: Message):
         await message.answer("✅ Алерт удалён")
     else:
         await message.answer("❌ Алерт не найден")
+
+
+@dp.message(Command("sniper"))
+async def sniper_status_command(message: Message):
+    save_user_id(message.from_user.id)
+    await message.answer(get_sniper_status_text(), parse_mode="Markdown")
 
 # ─── TEXT HANDLER ─────────────────────────────────────────────────────────────
 
