@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
 from alerts import AlertManager
+from sniper import scanner_loop
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -400,15 +401,6 @@ async def check_alerts_loop(bot_instance: Bot):
         except Exception as e:
             logger.error(f"Alert check error: {e}")
         await asyncio.sleep(60)
-from sniper import scanner_loop
-
-async def main():
-    global bot
-    bot = Bot(token=BOT_TOKEN)
-    logger.info("Bot started. Polling...")
-    asyncio.create_task(check_alerts_loop(bot))
-    asyncio.create_task(scanner_loop(bot))  # добавь эту строку
-    await dp.start_polling(bot)
 
 async def auto_scan_loop(bot_instance: Bot):
     while True:
@@ -474,6 +466,7 @@ async def main():
     logger.info("Bot started. Polling...")
     asyncio.create_task(check_alerts_loop(bot))
     asyncio.create_task(auto_scan_loop(bot))
+    asyncio.create_task(scanner_loop(bot))
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
