@@ -6,11 +6,14 @@ Crypto Signal Bot — Telegram (aiogram 3.x)
 import asyncio
 import logging
 import os
+import json
+from pathlib import Path
 from typing import Optional
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
 from alerts import AlertManager
@@ -21,12 +24,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk"
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+ENTRY_WAITING_USERS: set[int] = set()
 
 bot: Optional[Bot] = None
 dp = Dispatcher()
 analyzer = CryptoAnalyzer()
 alert_manager = AlertManager()
+
+
+def ensure_users_file() -> None:
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text("[]", encoding="utf-8")
+
+
+def load_users() -> set[int]:
+    ensure_users_file()
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        return {int(x) for x in data if isinstance(x, int) or str(x).isdigit()}
+    except Exception:
+        return set()
+
+
+def save_user_id(user_id: int) -> None:
+    users = load_users()
+    if user_id not in users:
+        users.add(user_id)
+        USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
 
 # ─── KEYBOARDS ────────────────────────────────────────────────────────────────
 
@@ -41,11 +69,22 @@ def main_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⚠️ Риск падения", callback_data="menu_dump")
     )
     builder.row(
-        InlineKeyboardButton(text="🔔 Мои алерты", callback_data="menu_alerts"),
+        InlineKeyboardButton(text="🆕 Новые монеты", callback_data="menu_new_coins"),
+        InlineKeyboardButton(text="💎 Gem Finder", callback_data="menu_gems")
+    )
+    builder.row(
+        InlineKeyboardButton(text="⚡ Точка входа", callback_data="menu_entry"),
         InlineKeyboardButton(text="📈 Топ сигналы", callback_data="menu_signals")
     )
     builder.row(
+        InlineKeyboardButton(text="🔔 Мои алерты", callback_data="menu_alerts"),
         InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="📱 Открыть приложение",
+            web_app=WebAppInfo(url="https://vayzer11.github.io/crypto-bot/")
+        )
     )
     return builder.as_markup()
 
@@ -58,6 +97,7 @@ def back_keyboard() -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart())
 async def start(message: Message):
+    save_user_id(message.from_user.id)
     text = (
         "👋 *Crypto Signal Bot* запущен!\n\n"
         "Я анализирую рынок в реальном времени и нахожу:\n"
@@ -71,6 +111,7 @@ async def start(message: Message):
 
 @dp.message(Command(commands=["analyze", "a"]))
 async def analyze_command(message: Message):
+    save_user_id(message.from_user.id)
     parts = message.text.split()
     if len(parts) < 2:
         await message.answer(
@@ -85,12 +126,14 @@ async def analyze_command(message: Message):
 
 @dp.message(Command("scan"))
 async def scan_command(message: Message):
+    save_user_id(message.from_user.id)
     msg = await message.answer("🔍 Сканирую рынок...")
     result = await analyzer.market_scan()
     await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
 
 @dp.message(Command("alert"))
 async def alert_command(message: Message):
+    save_user_id(message.from_user.id)
     parts = message.text.split()
     if len(parts) < 3:
         await message.answer(
@@ -115,6 +158,7 @@ async def alert_command(message: Message):
 
 @dp.message(Command("alerts"))
 async def alerts_command(message: Message):
+    save_user_id(message.from_user.id)
     user_id = message.from_user.id
     alerts = alert_manager.get_user_alerts(user_id)
     if not alerts:
@@ -128,6 +172,7 @@ async def alerts_command(message: Message):
 
 @dp.message(Command("delalert"))
 async def delalert_command(message: Message):
+    save_user_id(message.from_user.id)
     parts = message.text.split()
     if len(parts) < 2:
         await message.answer("Использование: `/delalert 1`", parse_mode="Markdown")
@@ -147,7 +192,25 @@ async def delalert_command(message: Message):
 
 @dp.message(F.text)
 async def text_handler(message: Message):
+    save_user_id(message.from_user.id)
     text = message.text.strip().upper()
+    if message.from_user.id in ENTRY_WAITING_USERS:
+        ENTRY_WAITING_USERS.discard(message.from_user.id)
+        msg = await message.answer(f"⏳ Ищу точку входа для {text}...")
+        result = await analyzer.detect_entry_signal(text)
+        if result.get("error"):
+            await msg.edit_text(f"❌ {result['error']}", reply_markup=back_keyboard())
+            return
+        patterns = result.get("patterns", [])
+        if not patterns:
+            body = f"⚡ *Точка входа: {text}*\n\nСильных паттернов пока нет.\nЦена: {result.get('price', 0):.6f}"
+        else:
+            lines = [f"⚡ *Точка входа: {text}*\n", f"Цена: `{result.get('price', 0):.6f}` | 24ч: `{result.get('change_24h', 0):+.2f}%`\n", "*Найденные паттерны:*"]
+            for p in patterns:
+                lines.append(f"• `{p['type']}` — {p['name']} ({p['strength']})")
+            body = "\n".join(lines)
+        await msg.edit_text(body, parse_mode="Markdown", reply_markup=back_keyboard())
+        return
     if 2 <= len(text) <= 10 and text.isalpha():
         msg = await message.answer(f"⏳ Анализирую {text}...")
         result = await analyzer.full_analysis(text)
@@ -157,6 +220,7 @@ async def text_handler(message: Message):
 
 @dp.callback_query(F.data == "menu_main")
 async def cb_main(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer()
     await query.message.answer(
         "👋 *Crypto Signal Bot*\nВыбери действие:",
@@ -166,6 +230,7 @@ async def cb_main(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_analyze")
 async def cb_analyze(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer()
     await query.message.answer(
         "📊 *Анализ монеты*\n\nПросто напиши символ монеты:\n`BTC` `ETH` `SOL` `RENDER` `TAO`\n\n"
@@ -176,6 +241,7 @@ async def cb_analyze(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_overbought")
 async def cb_overbought(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer("Загружаю данные...")
     msg = await query.message.answer("🔍 Ищу перекупленные монеты (RSI > 68)...")
     try:
@@ -186,6 +252,7 @@ async def cb_overbought(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_new")
 async def cb_new(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer("Загружаю данные...")
     msg = await query.message.answer("🔍 Ищу монеты с потенциалом...")
     try:
@@ -196,6 +263,7 @@ async def cb_new(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_dump")
 async def cb_dump(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer("Загружаю данные...")
     msg = await query.message.answer("🔍 Ищу монеты под риском дампа...")
     try:
@@ -204,8 +272,42 @@ async def cb_dump(query: CallbackQuery):
     except Exception as e:
         await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
+@dp.callback_query(F.data == "menu_new_coins")
+async def cb_new_coins(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    await query.answer("Сканирую рынок...")
+    msg = await query.message.answer("🆕 Ищу новые монеты, листинги и тренды...")
+    try:
+        result = await analyzer.find_new_coins()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+@dp.callback_query(F.data == "menu_gems")
+async def cb_gems(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    await query.answer("Ищу gems...")
+    msg = await query.message.answer("💎 Запускаю Gem Finder...")
+    try:
+        result = await analyzer.find_gems()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+@dp.callback_query(F.data == "menu_entry")
+async def cb_entry_menu(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    ENTRY_WAITING_USERS.add(query.from_user.id)
+    await query.answer()
+    await query.message.answer(
+        "⚡ Введи символ монеты для поиска точки входа.\nПример: `BTC` или `SOL`",
+        parse_mode="Markdown",
+        reply_markup=back_keyboard(),
+    )
+
 @dp.callback_query(F.data == "menu_signals")
 async def cb_signals(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer("Загружаю данные...")
     msg = await query.message.answer("🔍 Генерирую топ сигналы...")
     try:
@@ -216,6 +318,7 @@ async def cb_signals(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_alerts")
 async def cb_alerts(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer()
     user_id = query.from_user.id
     alerts = alert_manager.get_user_alerts(user_id)
@@ -232,6 +335,7 @@ async def cb_alerts(query: CallbackQuery):
 
 @dp.callback_query(F.data == "menu_help")
 async def cb_help(query: CallbackQuery):
+    save_user_id(query.from_user.id)
     await query.answer()
     text = (
         "❓ *Команды бота*\n\n"
@@ -241,6 +345,7 @@ async def cb_help(query: CallbackQuery):
         "`/alert ETH 2500 below` — алерт ниже цены\n"
         "`/alerts` — мои алерты\n"
         "`/delalert 1` — удалить алерт №1\n\n"
+        "`/entry BTC` — детектор точки входа\n\n"
         "Или просто напиши символ: `BTC` `ETH` `SOL`\n\n"
         "*Индикаторы:*\n"
         "• RSI — перекуплен/перепродан\n"
@@ -253,6 +358,33 @@ async def cb_help(query: CallbackQuery):
         "🟢 ПОКУПАТЬ | 🟡 ЖДАТЬ | 🔴 ПРОДАВАТЬ"
     )
     await query.message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
+
+@dp.message(Command("entry"))
+async def entry_command(message: Message):
+    save_user_id(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 2:
+        ENTRY_WAITING_USERS.add(message.from_user.id)
+        await message.answer("⚡ Укажи символ: `/entry BTC` или просто отправь символ следующим сообщением.", parse_mode="Markdown")
+        return
+    symbol = parts[1].upper()
+    msg = await message.answer(f"⏳ Анализирую точку входа для {symbol}...")
+    result = await analyzer.detect_entry_signal(symbol)
+    if result.get("error"):
+        await msg.edit_text(f"❌ {result['error']}", reply_markup=back_keyboard())
+        return
+    patterns = result.get("patterns", [])
+    if not patterns:
+        await msg.edit_text(
+            f"⚡ *{symbol}*: сильных входных паттернов пока нет.\nЦена: `{result.get('price', 0):.6f}`",
+            parse_mode="Markdown",
+            reply_markup=back_keyboard(),
+        )
+        return
+    lines = [f"⚡ *Точка входа: {symbol}*", f"Цена: `{result.get('price', 0):.6f}` | 24ч: `{result.get('change_24h', 0):+.2f}%`", "", "*Паттерны:*"]
+    for p in patterns:
+        lines.append(f"• `{p['type']}` — {p['name']} ({p['strength']})")
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_keyboard())
 
 # ─── ALERTS BACKGROUND TASK ───────────────────────────────────────────────────
 
@@ -269,9 +401,60 @@ async def check_alerts_loop(bot_instance: Bot):
             logger.error(f"Alert check error: {e}")
         await asyncio.sleep(60)
 
+
+async def auto_scan_loop(bot_instance: Bot):
+    while True:
+        try:
+            users = load_users()
+            if users:
+                strong = await analyzer.get_top_strong_buys(limit=200, threshold=40)
+                if strong:
+                    lines = ["🚨 *Auto Scan: сильные возможности (Score >= 40)*\n"]
+                    for coin in strong[:5]:
+                        lines.append(
+                            f"🟢 *{coin['symbol']}* ({coin['name']}) — Score `{coin['score']}` | "
+                            f"{coin['change_24h']:+.1f}% | {coin['price']:.6f}$"
+                        )
+                    msg = "\n".join(lines)
+                    for user_id in users:
+                        try:
+                            await bot_instance.send_message(user_id, msg, parse_mode="Markdown")
+                        except Exception:
+                            continue
+
+                gems = await analyzer.find_gems()
+                if "Score `70" in gems or "Score `8" in gems or "Score `9" in gems:
+                    alert = "💎 *AUTO GEM ALERT*\nНайдены gems с очень высоким score.\n\n" + gems
+                    for user_id in users:
+                        try:
+                            await bot_instance.send_message(user_id, alert, parse_mode="Markdown")
+                        except Exception:
+                            continue
+
+                top_coins = await analyzer._get_market_snapshot(20)
+                for coin in top_coins:
+                    entry = await analyzer.detect_entry_signal(coin["symbol"])
+                    if len(entry.get("patterns", [])) >= 3:
+                        details = "\n".join([f"• {p['name']} ({p['type']})" for p in entry["patterns"][:4]])
+                        entry_alert = (
+                            f"⚡ *ENTRY ALERT*: {coin['symbol']}\n"
+                            f"Обнаружено {len(entry['patterns'])} паттерна(ов) входа.\n{details}"
+                        )
+                        for user_id in users:
+                            try:
+                                await bot_instance.send_message(user_id, entry_alert, parse_mode="Markdown")
+                            except Exception:
+                                continue
+        except Exception as e:
+            logger.error(f"Auto scan error: {e}")
+        await asyncio.sleep(21600)
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 async def main():
+    ensure_users_file()
+    if not ANTHROPIC_API_KEY:
+        logger.warning("ANTHROPIC_API_KEY не задан. AI-анализ Claude будет недоступен.")
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN не задан. Укажи токен в переменных окружения Railway или терминала.")
 
@@ -282,6 +465,7 @@ async def main():
         raise RuntimeError("BOT_TOKEN невалидный. Получи новый токен у BotFather и обнови переменную окружения.") from exc
     logger.info("Bot started. Polling...")
     asyncio.create_task(check_alerts_loop(bot))
+    asyncio.create_task(auto_scan_loop(bot))
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

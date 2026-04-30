@@ -14,6 +14,7 @@ import json
 import os
 import statistics
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +23,17 @@ import aiohttp
 COINGECKO = "https://api.coingecko.com/api/v3"
 DEFILLAMA = "https://api.llama.fi"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+MEME_KEYWORDS = [
+    "pepe", "doge", "shib", "floki", "bonk", "wif", "cat", "dog", "frog", "moon", "ape",
+    "baby", "elon", "trump", "maga", "wojak", "chad", "based", "brett", "popcat", "neiro",
+    "pnut", "goat", "mew", "turbo", "mog", "act", "banana",
+]
+DEFI_KEYWORDS = [
+    "swap", "finance", "protocol", "lending", "vault", "yield", "dao", "governance", "uniswap",
+    "aave", "curve", "maker", "compound", "dydx", "gmx", "pendle",
+]
 
 SYMBOL_MAP = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
@@ -274,6 +286,8 @@ class CryptoAnalyzer:
             request_headers.update(headers)
 
         try:
+            if "api.coingecko.com" in url:
+                await asyncio.sleep(1)
             async with aiohttp.ClientSession(headers=request_headers) as session:
                 async with session.get(
                     url,
@@ -436,6 +450,157 @@ class CryptoAnalyzer:
             return "sell", score
         return "wait", score
 
+    def calculate_signal_score(
+        self,
+        rsi: float,
+        macd: float,
+        macd_signal: float,
+        price: float,
+        bb_lower: float,
+        bb_upper: float,
+        ema20: float,
+        ema50: float,
+        change_24h: float,
+        change_7d: float,
+        vol_ratio: float,
+    ) -> dict[str, Any]:
+        score = 0
+        reasons: list[str] = []
+
+        if rsi < 25:
+            score += 35
+            reasons.append("RSI экстремально перепродан")
+        elif rsi < 35:
+            score += 20
+            reasons.append("RSI перепродан")
+        elif rsi < 45:
+            score += 10
+            reasons.append("RSI нейтрально-бычий")
+        elif rsi > 75:
+            score -= 35
+            reasons.append("RSI экстремально перекуплен")
+        elif rsi > 65:
+            score -= 20
+            reasons.append("RSI перекуплен")
+
+        if macd > macd_signal and macd > 0:
+            score += 15
+            reasons.append("MACD бычий crossover")
+        elif macd > macd_signal:
+            score += 8
+            reasons.append("MACD разворот вверх")
+        elif macd < macd_signal and macd < 0:
+            score -= 15
+            reasons.append("MACD медвежий")
+
+        if price <= bb_lower:
+            score += 20
+            reasons.append("Цена у нижней BB")
+        elif price >= bb_upper:
+            score -= 20
+            reasons.append("Цена у верхней BB")
+
+        if ema20 > ema50:
+            score += 10
+            reasons.append("EMA20 > EMA50 (бычий тренд)")
+        else:
+            score -= 10
+            reasons.append("EMA20 < EMA50 (медвежий тренд)")
+
+        if vol_ratio > 10 and change_24h > 0:
+            score += 10
+            reasons.append("Высокий объём при росте")
+        elif vol_ratio > 10 and change_24h < 0:
+            score -= 10
+            reasons.append("Высокий объём при падении")
+
+        if change_7d > 15:
+            score += 5
+            reasons.append("Устойчивый рост за 7д")
+        elif change_7d < -15:
+            score -= 5
+            reasons.append("Сильная слабость за 7д")
+
+        if score >= 35:
+            signal = "🟢 ПОКУПАТЬ"
+            color = "buy"
+        elif score >= 15:
+            signal = "🟡 ОСТОРОЖНАЯ ПОКУПКА"
+            color = "watch"
+        elif score <= -35:
+            signal = "🔴 ПРОДАВАТЬ"
+            color = "sell"
+        elif score <= -15:
+            signal = "🟠 ОСТОРОЖНАЯ ПРОДАЖА"
+            color = "caution"
+        else:
+            signal = "⚪ ЖДАТЬ"
+            color = "wait"
+
+        entry = price
+        stop_loss = price * (0.93 if color in ["buy", "watch"] else 1.07)
+        tp1 = price * (1.05 if color in ["buy", "watch"] else 0.95)
+        tp2 = price * (1.12 if color in ["buy", "watch"] else 0.88)
+        tp3 = price * (1.22 if color in ["buy", "watch"] else 0.78)
+
+        return {
+            "signal": signal,
+            "score": int(clamp(score, -100, 100)),
+            "color": color,
+            "reasons": reasons[:4],
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3,
+        }
+
+    async def get_ai_analysis(self, symbol: str, data: dict[str, Any]) -> str:
+        if not ANTHROPIC_API_KEY:
+            return "Ключ ANTHROPIC_API_KEY не задан, AI-анализ недоступен."
+        prompt = f"""You are a professional crypto trader. Analyze {symbol}:
+Price: ${data['price']}
+RSI: {data['rsi']}
+MACD: {data['macd']}
+Change 24h: {data['change_24h']}%
+Change 7d: {data['change_7d']}%
+Volume/MCap ratio: {data['vol_ratio']}%
+Fear & Greed: {data['fear_greed']}
+TVL: {data['tvl']}
+
+Give a SHORT trading recommendation in Russian (4-6 sentences):
+1. Should I enter now or wait?
+2. Key risks
+3. What to watch for entry confirmation
+Be honest and specific. No generic advice."""
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        body = {
+            "model": "claude-opus-4-5",
+            "max_tokens": 500,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json=body,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=40),
+                ) as response:
+                    if response.status != 200:
+                        return "Claude временно недоступен, используй техническую часть анализа."
+                    result = await response.json()
+                    content = result.get("content", [])
+                    if content and isinstance(content, list):
+                        return str(content[0].get("text", "")).strip() or "Нет ответа от Claude."
+                    return "Нет ответа от Claude."
+        except Exception:
+            return "Ошибка запроса к Claude API."
+
     async def _get_market_snapshot(self, limit: int = 200) -> list[dict[str, Any]]:
         now = time.time()
         if self._market_cache and (now - self._market_cache_time) < self._market_cache_ttl:
@@ -488,6 +653,314 @@ class CryptoAnalyzer:
             if coin_id and coin.get("id") == coin_id:
                 return coin
         return None
+
+    def _coin_category(self, coin: dict[str, Any]) -> str:
+        rank = int(coin.get("market_cap_rank") or 999999)
+        name_id = f"{coin.get('name', '')} {coin.get('id', '')}".lower()
+        vol_ratio = (safe_float(coin.get("total_volume")) / safe_float(coin.get("market_cap"))) if safe_float(coin.get("market_cap")) > 0 else 0
+        change_24h = safe_float(coin.get("price_change_percentage_24h"))
+        if any(k in name_id for k in MEME_KEYWORDS):
+            return "🐸 MEMECOIN"
+        if any(k in name_id for k in DEFI_KEYWORDS):
+            return "💎 DEFI"
+        if vol_ratio > 0.2 and rank > 200:
+            return "🆕 NEW LISTING"
+        if change_24h > 30:
+            return "🔥 HOT"
+        return "📌 WATCHLIST"
+
+    async def find_new_coins(self) -> str:
+        try:
+            markets = await self._get_json(
+                f"{COINGECKO}/coins/markets",
+                {
+                    "vs_currency": "usd",
+                    "order": "volume_desc",
+                    "per_page": 100,
+                    "page": 1,
+                    "sparkline": "false",
+                    "price_change_percentage": "24h,7d",
+                },
+            )
+            trending = await self._get_json(f"{COINGECKO}/search/trending")
+            trending_ids = {item.get("item", {}).get("id", "") for item in (trending or {}).get("coins", [])}
+            now = datetime.now(timezone.utc)
+            filtered: list[dict[str, Any]] = []
+
+            for coin in markets or []:
+                mcap = safe_float(coin.get("market_cap"))
+                volume = safe_float(coin.get("total_volume"))
+                if mcap <= 0:
+                    continue
+                vol_ratio = (volume / mcap) * 100
+                change_24h = safe_float(coin.get("price_change_percentage_24h"))
+                change_7d = safe_float(coin.get("price_change_percentage_7d_in_currency"))
+                atl_date = str(coin.get("atl_date") or "")
+                is_recent = False
+                if atl_date:
+                    try:
+                        is_recent = (now - datetime.fromisoformat(atl_date.replace("Z", "+00:00"))).days <= 30
+                    except Exception:
+                        is_recent = False
+
+                matched = (
+                    is_recent
+                    or vol_ratio > 15
+                    or change_24h > 20
+                    or (mcap < 500_000_000 and volume > 50_000_000)
+                    or coin.get("id") in trending_ids
+                )
+                if not matched:
+                    continue
+
+                if vol_ratio > 50 and change_24h > 50:
+                    risk = "🔴 HIGH RISK"
+                    risk_level = 2
+                    quick = "AVOID 🚫"
+                elif vol_ratio > 25 or change_24h > 30:
+                    risk = "🟡 MEDIUM RISK"
+                    risk_level = 1
+                    quick = "RISKY ⚠️"
+                else:
+                    risk = "🟢 LOW RISK"
+                    risk_level = 0
+                    quick = "WATCH 👀"
+
+                filtered.append(
+                    {
+                        "symbol": coin.get("symbol", "").upper(),
+                        "name": coin.get("name", ""),
+                        "price": safe_float(coin.get("current_price")),
+                        "change_24h": change_24h,
+                        "change_7d": change_7d,
+                        "vol_ratio": vol_ratio,
+                        "volume": volume,
+                        "category": self._coin_category(coin),
+                        "risk": risk,
+                        "risk_level": risk_level,
+                        "quick": quick,
+                    }
+                )
+
+            filtered.sort(key=lambda x: (x["risk_level"], -x["volume"]))
+            if not filtered:
+                return "🆕 Новые монеты по заданным фильтрам не найдены."
+            lines = ["🆕 *Новые монеты: Meme/DeFi/Листинги*\n"]
+            for coin in filtered[:10]:
+                lines.append(
+                    f"{coin['category']} *{coin['symbol']}* ({coin['name']})\n"
+                    f"Цена: {fmt_price(coin['price'])} | 24ч: {coin['change_24h']:+.1f}% | 7д: {coin['change_7d']:+.1f}%\n"
+                    f"Vol/MCap: {coin['vol_ratio']:.1f}% | {coin['risk']} | {coin['quick']}"
+                )
+            lines.append("\n⚠️ Новые монеты = высокий риск. DYOR.")
+            return "\n\n".join(lines)
+        except Exception:
+            return "❌ Не удалось выполнить скан новых монет. Попробуй позже."
+
+    def calculate_gem_score(self, coin: dict) -> dict:
+        score = 0
+        signals: list[str] = []
+        potential = ""
+
+        mcap = safe_float(coin.get("market_cap"))
+        vol = safe_float(coin.get("total_volume"))
+        vol_ratio = vol / mcap if mcap > 0 else 0
+        change_24h = safe_float(coin.get("price_change_percentage_24h"))
+        change_7d = safe_float(coin.get("price_change_percentage_7d_in_currency"))
+        ath = safe_float(coin.get("ath"))
+        price = safe_float(coin.get("current_price"))
+        ath_drop = ((price - ath) / ath * 100) if ath > 0 else 0
+
+        if mcap < 10_000_000:
+            score += 40
+            signals.append("Микрокапа < $10M 🚀")
+        elif mcap < 50_000_000:
+            score += 30
+            signals.append("Малая капа < $50M")
+        elif mcap < 100_000_000:
+            score += 20
+            signals.append("Капа < $100M")
+        elif mcap < 500_000_000:
+            score += 10
+            signals.append("Капа < $500M")
+
+        if vol_ratio > 0.5:
+            score += 35
+            signals.append("Аномальный объём! Кто-то скупает 🐋")
+        elif vol_ratio > 0.3:
+            score += 25
+            signals.append("Очень высокий объём")
+        elif vol_ratio > 0.15:
+            score += 15
+            signals.append("Высокий объём")
+
+        if ath_drop < -90:
+            score += 30
+            signals.append("На -90% от ATH — огромный потенциал")
+        elif ath_drop < -80:
+            score += 20
+            signals.append("На -80% от ATH")
+        elif ath_drop < -70:
+            score += 10
+            signals.append("На -70% от ATH")
+
+        if change_24h > 30:
+            score += 25
+            signals.append("Уже растёт +30% за 24ч 🔥")
+        elif change_24h > 15:
+            score += 15
+            signals.append("Движение +15% за 24ч")
+        elif change_24h > 5:
+            score += 8
+            signals.append("Начинает двигаться")
+        elif change_24h < -20:
+            score -= 20
+            signals.append("Сильное падение ⚠️")
+
+        if change_7d > 50:
+            score += 20
+            signals.append("Тренд +50% за 7д")
+        elif change_7d > 20:
+            score += 10
+            signals.append("Тренд +20% за 7д")
+        elif change_7d < -30:
+            score -= 15
+
+        if mcap < 10_000_000 and score >= 60:
+            potential = "🚀 x50-x100 потенциал"
+        elif mcap < 50_000_000 and score >= 50:
+            potential = "🚀 x20-x50 потенциал"
+        elif mcap < 100_000_000 and score >= 40:
+            potential = "📈 x10-x20 потенциал"
+        elif mcap < 500_000_000 and score >= 35:
+            potential = "📈 x5-x10 потенциал"
+        else:
+            potential = "📊 x2-x5 потенциал"
+
+        if vol_ratio > 0.5 and change_24h > 50:
+            risk = "🔴 ОЧЕНЬ ВЫСОКИЙ (возможен дамп)"
+        elif mcap < 10_000_000:
+            risk = "🟠 ВЫСОКИЙ (малая капа)"
+        elif score >= 50:
+            risk = "🟡 СРЕДНИЙ"
+        else:
+            risk = "🟢 УМЕРЕННЫЙ"
+        return {"score": min(score, 100), "signals": signals[:4], "potential": potential, "risk": risk, "ath_drop": ath_drop}
+
+    async def find_gems(self) -> str:
+        try:
+            markets_top = await self._get_json(
+                f"{COINGECKO}/coins/markets",
+                {"vs_currency": "usd", "order": "volume_desc", "per_page": 250, "page": 1, "sparkline": "false", "price_change_percentage": "24h,7d"},
+            )
+            markets_top2 = await self._get_json(
+                f"{COINGECKO}/coins/markets",
+                {"vs_currency": "usd", "order": "volume_desc", "per_page": 250, "page": 2, "sparkline": "false", "price_change_percentage": "24h,7d"},
+            )
+            trending = await self._get_json(f"{COINGECKO}/search/trending")
+            trending_ids = [item.get("item", {}).get("id") for item in (trending or {}).get("coins", []) if item.get("item", {}).get("id")]
+
+            all_markets = (markets_top or []) + (markets_top2 or [])
+            by_id = {item.get("id"): item for item in all_markets if item.get("id")}
+
+            for coin_id in trending_ids:
+                if coin_id in by_id:
+                    continue
+                details = await self._get_json(
+                    f"{COINGECKO}/coins/markets",
+                    {"vs_currency": "usd", "ids": coin_id, "sparkline": "false", "price_change_percentage": "24h,7d"},
+                )
+                if details:
+                    by_id[coin_id] = details[0]
+
+            candidates = [coin for coin in by_id.values() if safe_float(coin.get("market_cap")) < 100_000_000 or coin.get("id") in trending_ids]
+            scored = []
+            for coin in candidates:
+                gem = self.calculate_gem_score(coin)
+                if gem["score"] >= 35:
+                    scored.append((coin, gem))
+            scored.sort(key=lambda item: item[1]["score"], reverse=True)
+            if not scored:
+                return "💎 Gems с оценкой 35+ сейчас не найдено."
+
+            lines = ["💎 *Gem Finder — монеты с потенциалом x10-x100*\n"]
+            for coin, gem in scored[:5]:
+                lines.append(
+                    f"*{coin.get('symbol', '').upper()}* ({coin.get('name', '')}) — Score `{gem['score']}/100`\n"
+                    f"Цена: {fmt_price(safe_float(coin.get('current_price')))} | Капа: {fmt_b(safe_float(coin.get('market_cap')))}\n"
+                    f"24ч: {safe_float(coin.get('price_change_percentage_24h')):+.1f}% | 7д: {safe_float(coin.get('price_change_percentage_7d_in_currency')):+.1f}% | ATH: {gem['ath_drop']:.1f}%\n"
+                    f"{gem['potential']} | Риск: {gem['risk']}\n"
+                    f"Сигналы: {'; '.join(gem['signals'])}"
+                )
+            lines.append("\n⚠️ Это высокорисковые идеи. Обязательно проверяй ликвидность и токеномику.")
+            return "\n\n".join(lines)
+        except Exception:
+            return "❌ Не удалось найти gems. Попробуй позже."
+
+    async def detect_entry_signal(self, symbol: str) -> dict[str, Any]:
+        try:
+            coin_id = await self._resolve_id(symbol)
+            data = await self._get_json(
+                f"{COINGECKO}/coins/{coin_id}/market_chart",
+                {"vs_currency": "usd", "days": 30, "interval": "daily"},
+            )
+            if not data:
+                return {"symbol": symbol.upper(), "patterns": [], "error": "Нет данных графика."}
+
+            prices = [safe_float(p[1]) for p in data.get("prices", [])]
+            volumes = [safe_float(v[1]) for v in data.get("total_volumes", [])]
+            if len(prices) < 25:
+                return {"symbol": symbol.upper(), "patterns": [], "error": "Недостаточно данных."}
+
+            rsi_prev = calc_rsi(prices[:-1])
+            rsi_current = calc_rsi(prices)
+            macd_prev, signal_prev, _ = calc_macd(prices[:-1])
+            macd_current, signal_current, _ = calc_macd(prices)
+            bb_lower_prev, _, _ = calc_bollinger(prices[:-1])
+            bb_lower_current, _, _ = calc_bollinger(prices)
+            price_prev = prices[-2]
+            price_current = prices[-1]
+            current_volume = volumes[-1] if volumes else 0
+            avg_volume = sum(volumes[-8:-1]) / max(len(volumes[-8:-1]), 1) if len(volumes) >= 8 else current_volume
+            change_24h = ((price_current - price_prev) / price_prev * 100) if price_prev else 0
+
+            patterns = []
+            if rsi_prev > 70 and rsi_current < 65:
+                patterns.append({"name": "RSI разворот вниз", "type": "SELL", "strength": "strong"})
+            if rsi_prev < 30 and rsi_current > 35:
+                patterns.append({"name": "RSI разворот вверх", "type": "BUY", "strength": "strong"})
+            if (macd_prev or 0) < (signal_prev or 0) and (macd_current or 0) > (signal_current or 0):
+                patterns.append({"name": "MACD Golden Cross", "type": "BUY", "strength": "very_strong"})
+            if bb_lower_prev is not None and bb_lower_current is not None and price_prev < bb_lower_prev and price_current > bb_lower_current:
+                patterns.append({"name": "Отскок от нижней BB", "type": "BUY", "strength": "strong"})
+            if current_volume > avg_volume * 3 and change_24h > 0:
+                patterns.append({"name": "Аномальный объём при росте", "type": "BUY", "strength": "medium"})
+
+            return {"symbol": symbol.upper(), "patterns": patterns, "price": price_current, "change_24h": change_24h}
+        except Exception:
+            return {"symbol": symbol.upper(), "patterns": [], "error": "Ошибка анализа точки входа."}
+
+    async def get_top_strong_buys(self, limit: int = 200, threshold: int = 40) -> list[dict[str, Any]]:
+        coins = await self._get_market_snapshot(limit)
+        strong: list[dict[str, Any]] = []
+        for coin in coins:
+            score_data = self.calculate_signal_score(
+                rsi=coin["rsi"],
+                macd=coin["change_24h"] / 10,
+                macd_signal=coin["change_7d"] / 10,
+                price=coin["price"],
+                bb_lower=coin["price"] * 0.97,
+                bb_upper=coin["price"] * 1.03,
+                ema20=coin["price"] * (1 + coin["change_24h"] / 1000),
+                ema50=coin["price"] * (1 + coin["change_7d"] / 1000),
+                change_24h=coin["change_24h"],
+                change_7d=coin["change_7d"],
+                vol_ratio=coin["vol_ratio"] * 100,
+            )
+            if score_data["score"] >= threshold:
+                strong.append({"symbol": coin["symbol"], "name": coin["name"], "score": score_data["score"], "price": coin["price"], "change_24h": coin["change_24h"]})
+        strong.sort(key=lambda item: item["score"], reverse=True)
+        return strong[:10]
 
     def _build_snapshot_analysis(
         self,
@@ -570,39 +1043,26 @@ class CryptoAnalyzer:
         vol_ratio = (volume / cap) if cap > 0 else 0
 
         rsi = calc_rsi(prices) if len(prices) >= 15 else (snapshot_coin["rsi"] if snapshot_coin else 50.0)
-        macd_val, _, macd_hist = calc_macd(prices) if len(prices) >= 30 else (None, None, None)
+        macd_val, macd_signal, macd_hist = calc_macd(prices) if len(prices) >= 30 else (None, None, None)
         bb_low, bb_mid, bb_high = calc_bollinger(prices) if len(prices) >= 20 else (None, None, None)
         ema20 = calc_ema(prices, 20)
         ema50 = calc_ema(prices, 50)
         ema20_val = ema20[-1] if ema20 else None
         ema50_val = ema50[-1] if ema50 else None
 
-        onchain_score = 0
-        if defi.get("tvl_change") and defi["tvl_change"] > 5:
-            onchain_score += 1
-        if defi.get("flows") and defi["flows"] > 0:
-            onchain_score += 1
-        if fg["value"] < 25:
-            onchain_score += 1
-        elif fg["value"] > 75:
-            onchain_score -= 1
-
-        signal_label, signal_desc = overall_signal(
-            rsi, macd_hist, price, bb_low, bb_mid, bb_high, vol_ratio, onchain_score
+        signal_data = self.calculate_signal_score(
+            rsi=rsi,
+            macd=macd_val or 0.0,
+            macd_signal=macd_signal or 0.0,
+            price=price,
+            bb_lower=bb_low or price,
+            bb_upper=bb_high or price,
+            ema20=ema20_val or price,
+            ema50=ema50_val or price,
+            change_24h=change_24h,
+            change_7d=change_7d,
+            vol_ratio=vol_ratio * 100,
         )
-
-        if bb_low and bb_high:
-            stop_loss = round(price * 0.94, 8)
-            tp1 = round(bb_mid, 8)
-            tp2 = round(bb_high, 8)
-            tp3 = round(price * 1.15, 8)
-            entry_zone = f"{fmt_price(price * 0.98)} – {fmt_price(price)}"
-        else:
-            stop_loss = round(price * 0.94, 8)
-            tp1 = round(price * 1.05, 8)
-            tp2 = round(price * 1.10, 8)
-            tp3 = round(price * 1.15, 8)
-            entry_zone = fmt_price(price)
 
         fear_value = fg["value"]
         fear_emoji = "😱" if fear_value < 25 else "😨" if fear_value < 45 else "😐" if fear_value < 55 else "😊" if fear_value < 75 else "🤑"
@@ -610,30 +1070,40 @@ class CryptoAnalyzer:
         macd_text = f"`{macd_val}` (гист: `{macd_hist}`)" if macd_val is not None else "N/A"
         bb_text = f"`{fmt_price(bb_low)}` / `{fmt_price(bb_mid)}` / `{fmt_price(bb_high)}`" if bb_low else "N/A"
 
+        ai_text = await self.get_ai_analysis(
+            symbol.upper(),
+            {
+                "price": round(price, 8),
+                "rsi": rsi,
+                "macd": macd_val if macd_val is not None else 0,
+                "change_24h": round(change_24h, 2),
+                "change_7d": round(change_7d, 2),
+                "vol_ratio": round(vol_ratio * 100, 2),
+                "fear_greed": fg["value"],
+                "tvl": fmt_b(defi["tvl"]) if defi.get("tvl") else "N/A",
+            },
+        )
+
         lines = [
-            f"📊 *{data['name']} ({symbol.upper()})* — Полный анализ",
+            f"📊 *{data['name']} ({symbol.upper()})*",
             "",
-            f"💰 *Цена:* {fmt_price(price)}",
-            f"📈 *Изменение:* {change_24h:+.2f}% (24ч) | {change_7d:+.2f}% (7д) | {change_30d:+.2f}% (30д)",
-            f"🏦 *Капитализация:* {fmt_b(cap)}",
-            f"📦 *Объём 24ч:* {fmt_b(volume)} ({vol_ratio * 100:.1f}% от кап)",
-            f"🏆 *ATH:* {fmt_price(ath)} (сейчас {ath_change:.1f}%)",
+            f"💰 Цена: *{fmt_price(price)}*",
+            f"📈 24ч: *{change_24h:+.2f}%* | 7д: *{change_7d:+.2f}%* | 30д: *{change_30d:+.2f}%*",
+            f"🏦 Капитализация: *{fmt_b(cap)}*",
+            f"📦 Объём 24ч: *{fmt_b(volume)}* ({vol_ratio * 100:.1f}% от капы)",
+            f"🏆 ATH: *{fmt_price(ath)}* ({ath_change:.1f}%)",
             "",
-            "━━━ ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ━━━",
-            f"*RSI (14):* `{rsi}` — {rsi_signal(rsi)}",
-            f"*MACD:* {macd_text}",
-            f"*Bollinger Bands:* {bb_text}",
+            "━━━ Индикаторы ━━━",
+            f"RSI(14): `{rsi}` — {rsi_signal(rsi)}",
+            f"MACD: {macd_text}",
+            f"Bollinger: {bb_text}",
         ]
 
         if ema20_val and ema50_val:
             trend = "📈 Бычий" if ema20_val > ema50_val else "📉 Медвежий"
             lines.append(f"*EMA 20/50:* `{fmt_price(ema20_val)}` / `{fmt_price(ema50_val)}` — {trend}")
 
-        lines += [
-            "",
-            "━━━ ОНЧЕЙН ДАННЫЕ ━━━",
-            f"{fear_emoji} *Fear & Greed:* `{fear_value}` — {fg['label']}",
-        ]
+        lines += ["", "━━━ Ончейн ━━━", f"{fear_emoji} Fear & Greed: `{fear_value}` — {fg['label']}"]
 
         if defi.get("tvl"):
             tvl_change = safe_float(defi.get("tvl_change"))
@@ -652,16 +1122,23 @@ class CryptoAnalyzer:
 
         lines += [
             "",
-            "━━━ СИГНАЛ ━━━",
-            f"*{signal_label}*",
-            f"_{signal_desc}_",
+            "━━━ Сигнал ━━━",
+            f"{signal_data['signal']} *(Score: {signal_data['score']}/100)*",
+            "Причины:",
+        ]
+        for reason in signal_data["reasons"]:
+            lines.append(f"• {reason}")
+        lines += [
             "",
-            "━━━ ТОЧКИ ━━━",
-            f"🎯 *Зона входа:* {entry_zone}",
-            f"🛑 *Стоп-лосс:* {fmt_price(stop_loss)} (-6%)",
-            f"✅ *TP1:* {fmt_price(tp1)}",
-            f"✅ *TP2:* {fmt_price(tp2)}",
-            f"✅ *TP3:* {fmt_price(tp3)} (+15%)",
+            "Точки:",
+            f"🎯 Вход: *{fmt_price(signal_data['entry'])}*",
+            f"🛑 SL: *{fmt_price(signal_data['stop_loss'])}*",
+            f"✅ TP1: *{fmt_price(signal_data['tp1'])}*",
+            f"✅ TP2: *{fmt_price(signal_data['tp2'])}*",
+            f"✅ TP3: *{fmt_price(signal_data['tp3'])}*",
+            "",
+            "🤖 *AI Анализ (Claude):*",
+            ai_text,
         ]
 
         if vol_ratio > 0.3:
