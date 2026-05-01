@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
