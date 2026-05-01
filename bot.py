@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
 from alerts import AlertManager
-from sniper import scanner_loop, get_sniper_status_text
+from scanner import get_sniper_status_text
+from sniper import scanner_loop
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
