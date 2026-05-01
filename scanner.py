@@ -19,21 +19,9 @@ logger = logging.getLogger(__name__)
 DEX_TOKEN_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1"
 DEX_RECENT_PAIRS = "https://api.dexscreener.com/latest/dex/tokens/recently-added"
 GECKO_BASE = "https://api.geckoterminal.com/api/v2"
-GECKO_REQUEST_DELAY_SEC = 10.0
 
 BASE_DIR = Path(__file__).resolve().parent
 SEEN_TOKENS_FILE = BASE_DIR / "seen_tokens.json"
-
-# Состояние фонового цикла sniper (обновляется из sniper.scanner_loop)
-SNIPER_LOOP_STATE: dict[str, Any] = {
-    "running": False,
-    "tokens_scanned_today": 0,
-    "signals_sent_today": 0,
-    "last_signal_time": None,
-    "last_scan_time": None,
-    "last_error": None,
-    "day": datetime.now(timezone.utc).date().isoformat(),
-}
 
 MEME_KEYWORDS = {
     "pepe", "doge", "shib", "cat", "dog", "frog", "moon", "elon", "trump", "maga", "chad",
@@ -42,51 +30,15 @@ MEME_KEYWORDS = {
 }
 
 DEFAULT_FILTERS = {
-    "max_age_hours": 12.0,
-    "min_liquidity": 5_000.0,
-    "max_liquidity": 500_000.0,
-    "min_vol_liq_ratio": 0.5,
+    "max_age_hours": 48.0,
+    "min_liquidity": 3_000.0,
+    "max_liquidity": 2_000_000.0,
+    "min_vol_liq_ratio": 0.35,
     "chains": {"ethereum", "solana"},
-    "max_buy_tax": 5.0,
-    "max_sell_tax": 5.0,
+    "max_buy_tax": 10.0,
+    "max_sell_tax": 9.99,
     "min_score": 50,
 }
-
-
-def _as_list(data: Any) -> list[Any]:
-    if data is None or not isinstance(data, list):
-        return []
-    return data
-
-
-def _as_dict_pairs(data: Any) -> list[Any]:
-    if data is None or not isinstance(data, dict):
-        return []
-    pairs = data.get("pairs")
-    if pairs is None or not isinstance(pairs, list):
-        return []
-    return pairs
-
-
-def _as_dict_data_rows(data: Any) -> list[Any]:
-    if data is None or not isinstance(data, dict):
-        return []
-    rows = data.get("data")
-    if rows is None or not isinstance(rows, list):
-        return []
-    return rows
-
-
-def get_sniper_status_text() -> str:
-    status = "🟢 RUNNING" if SNIPER_LOOP_STATE["running"] else "🔴 STOPPED"
-    return (
-        "🎯 *MEME SNIPER СТАТУС*\n\n"
-        f"• Scanner status: {status}\n"
-        f"• Токенов проверено сегодня: {SNIPER_LOOP_STATE['tokens_scanned_today']}\n"
-        f"• Сигналов отправлено сегодня: {SNIPER_LOOP_STATE['signals_sent_today']}\n"
-        f"• Last signal time: {SNIPER_LOOP_STATE['last_signal_time'] or '—'}\n"
-        f"• Last scan time: {SNIPER_LOOP_STATE['last_scan_time'] or '—'}"
-    )
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -109,9 +61,9 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _chain_normalize(value: str) -> str:
     text = (value or "").strip().lower()
-    if text in {"eth", "ethereum"}:
+    if text in {"eth", "ethereum", "1", "ethereum-network"}:
         return "ethereum"
-    if text in {"sol", "solana"}:
+    if text in {"sol", "solana", "1399811149", "solana-network"}:
         return "solana"
     return text
 
@@ -223,10 +175,6 @@ class MemecoinScanner:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
-                    if response.status == 429:
-                        logger.warning("HTTP 429 (%s), ждём %s с", url, GECKO_REQUEST_DELAY_SEC)
-                        await asyncio.sleep(GECKO_REQUEST_DELAY_SEC)
-                        return None
                     if response.status != 200:
                         logger.warning("HTTP %s (%s)", response.status, url)
                         return None
@@ -236,8 +184,6 @@ class MemecoinScanner:
             return None
 
     def _normalize_dex_pair(self, pair: dict[str, Any]) -> dict[str, Any] | None:
-        if pair is None or not isinstance(pair, dict):
-            return None
         chain = _chain_normalize(str(pair.get("chainId", "")))
         if chain not in self.filters["chains"]:
             return None
@@ -285,8 +231,6 @@ class MemecoinScanner:
         }
 
     def _normalize_gecko_pool(self, row: dict[str, Any]) -> dict[str, Any] | None:
-        if row is None or not isinstance(row, dict):
-            return None
         attrs = row.get("attributes") or {}
         chain = _chain_normalize(str(attrs.get("network") or attrs.get("network_slug") or ""))
         if chain not in self.filters["chains"]:
@@ -334,13 +278,35 @@ class MemecoinScanner:
         }
 
     async def fetch_sources(self) -> list[dict[str, Any]]:
+        """Параллельная загрузка (для тестов). В проде используй fetch_sources_sequential."""
+        urls = [
+            DEX_TOKEN_PROFILES,
+            DEX_RECENT_PAIRS,
+            f"{GECKO_BASE}/networks/eth/new_pools?page=1",
+            f"{GECKO_BASE}/networks/solana/new_pools?page=1",
+        ]
+        payloads = await asyncio.gather(*(self._get_json(url) for url in urls))
+        return self._build_rows_from_payloads(payloads)
+
+    async def fetch_sources_sequential(self) -> list[dict[str, Any]]:
+        urls = [
+            DEX_TOKEN_PROFILES,
+            DEX_RECENT_PAIRS,
+            f"{GECKO_BASE}/networks/eth/new_pools?page=1",
+            f"{GECKO_BASE}/networks/solana/new_pools?page=1",
+        ]
+        payloads: list[Any] = []
+        for url in urls:
+            payloads.append(await self._get_json(url))
+            await asyncio.sleep(3)
+        return self._build_rows_from_payloads(payloads)
+
+    def _build_rows_from_payloads(self, payloads: list[Any]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
 
-        raw_profiles = await self._get_json(DEX_TOKEN_PROFILES)
-        profiles = _as_list(raw_profiles)
+        # Dex token profiles
+        profiles = payloads[0] if isinstance(payloads[0], list) else []
         for item in profiles:
-            if item is None or not isinstance(item, dict):
-                continue
             chain = _chain_normalize(str(item.get("chainId") or ""))
             contract = str(item.get("tokenAddress") or item.get("address") or "").strip()
             if chain not in self.filters["chains"] or not contract:
@@ -369,36 +335,27 @@ class MemecoinScanner:
                 }
             )
 
-        raw_recent = await self._get_json(DEX_RECENT_PAIRS)
-        for pair in _as_dict_pairs(raw_recent):
+        # Dex recent pairs
+        recent_pairs = (payloads[1] or {}).get("pairs", []) if isinstance(payloads[1], dict) else []
+        for pair in recent_pairs:
             normalized = self._normalize_dex_pair(pair)
             if normalized:
                 out.append(normalized)
 
-        gecko_eth_url = f"{GECKO_BASE}/networks/eth/new_pools"
-        gecko_sol_url = f"{GECKO_BASE}/networks/solana/new_pools"
-
-        await asyncio.sleep(GECKO_REQUEST_DELAY_SEC)
-        raw_gecko_eth = await self._get_json(gecko_eth_url)
-        for row in _as_dict_data_rows(raw_gecko_eth):
-            normalized = self._normalize_gecko_pool(row)
-            if normalized:
-                out.append(normalized)
-
-        await asyncio.sleep(GECKO_REQUEST_DELAY_SEC)
-        raw_gecko_sol = await self._get_json(gecko_sol_url)
-        for row in _as_dict_data_rows(raw_gecko_sol):
-            normalized = self._normalize_gecko_pool(row)
-            if normalized:
-                out.append(normalized)
+        # Gecko pools eth/sol
+        for idx in (2, 3):
+            rows = (payloads[idx] or {}).get("data", []) if isinstance(payloads[idx], dict) else []
+            for row in rows:
+                normalized = self._normalize_gecko_pool(row)
+                if normalized:
+                    out.append(normalized)
 
         return out
+
 
     def _merge_best(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}
         for row in rows:
-            if row is None or not isinstance(row, dict):
-                continue
             uid = token_uid(row.get("chain", ""), row.get("contract", ""))
             if not uid:
                 continue
@@ -406,6 +363,7 @@ class MemecoinScanner:
             if not prev:
                 merged[uid] = row
                 continue
+            # Берем запись с более полной ликвидностью/объёмом.
             prev_quality = _safe_float(prev.get("liquidity")) + _safe_float(prev.get("volume_1h"))
             row_quality = _safe_float(row.get("liquidity")) + _safe_float(row.get("volume_1h"))
             if row_quality > prev_quality:
@@ -413,32 +371,37 @@ class MemecoinScanner:
         return list(merged.values())
 
     def prefilter_memecoins(self, rows: list[dict[str, Any]], seen_tokens: set[str]) -> list[dict[str, Any]]:
-        if rows is None or not isinstance(rows, list):
-            return []
+        """Новые токены с DEX/Gecko (не только мемы). Профили DEX могут быть без ликвидности в ответе."""
         out: list[dict[str, Any]] = []
         for token in self._merge_best(rows):
             uid = token_uid(token.get("chain", ""), token.get("contract", ""))
             if uid in seen_tokens:
                 continue
 
+            if token.get("chain") not in self.filters["chains"]:
+                continue
+
+            src = str(token.get("source") or "")
+            if src == "dex_token_profiles":
+                out.append(token)
+                continue
+
             age = _safe_float(token.get("age_hours"), 999.0)
             liq = _safe_float(token.get("liquidity"))
             ratio = _safe_float(token.get("vol_liq_ratio"))
+            v24 = _safe_float(token.get("volume_24h"))
+            if ratio <= 0 and liq > 0 and v24 > 0:
+                ratio = v24 / liq
             buys = _safe_int(token.get("buys_1h"))
             sells = _safe_int(token.get("sells_1h"))
-            cap = _safe_float(token.get("market_cap"))
 
-            if token.get("chain") not in self.filters["chains"]:
-                continue
             if age > self.filters["max_age_hours"]:
                 continue
-            if liq < self.filters["min_liquidity"] or liq > self.filters["max_liquidity"]:
+            if liq > 0 and (liq < self.filters["min_liquidity"] or liq > self.filters["max_liquidity"]):
                 continue
-            if ratio <= self.filters["min_vol_liq_ratio"]:
+            if liq > 0 and ratio <= self.filters["min_vol_liq_ratio"]:
                 continue
-            if buys <= sells:
-                continue
-            if not _is_memecoin(str(token.get("name", "")), str(token.get("symbol", "")), cap):
+            if sells > 0 and buys <= sells:
                 continue
             out.append(token)
         return out

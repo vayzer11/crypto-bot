@@ -1,187 +1,235 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-async def scanner_loop(bot) -> None:
-    """
-    Единственная публичная точка входа модуля.
-    Фоновый MEME-sniper: скан, фильтры, GoPlus, Groq, рассылка в Telegram.
-    Без Bot(), без Dispatcher, без start_polling.
-    """
-    import asyncio
-    import json
-    import logging
-    import os
-    from datetime import datetime, timezone
-    from pathlib import Path
-    from typing import Any
+import aiohttp
 
-    import aiohttp
+from contract_checker import ContractSecurityChecker
+from scanner import MemecoinScanner, calculate_x1000_score, load_seen_tokens, save_seen_tokens, token_uid
 
-    from contract_checker import ContractSecurityChecker
-    from scanner import (
-        MemecoinScanner,
-        SNIPER_LOOP_STATE,
-        calculate_x1000_score,
-        load_seen_tokens,
-        save_seen_tokens,
-        token_uid,
+logger = logging.getLogger(__name__)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+
+scanner = MemecoinScanner()
+checker = ContractSecurityChecker()
+
+SCANNER_STATE: dict[str, Any] = {
+    "running": False,
+    "tokens_scanned_today": 0,
+    "signals_sent_today": 0,
+    "last_signal_time": None,
+    "last_scan_time": None,
+    "last_error": None,
+    "day": datetime.now(timezone.utc).date().isoformat(),
+}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def load_users() -> set[int]:
+    if not USERS_FILE.exists():
+        try:
+            USERS_FILE.write_text("[]", encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {int(x) for x in data if str(x).isdigit()}
+    except Exception as exc:
+        logger.error("Ошибка users.json: %s", exc)
+    return set()
+
+
+def get_sniper_status_text() -> str:
+    status = "🟢 RUNNING" if SCANNER_STATE["running"] else "🔴 STOPPED"
+    return (
+        "🎯 *MEME SNIPER СТАТУС*\n\n"
+        f"• Сканер: {status}\n"
+        f"• Токенов проверено сегодня: {SCANNER_STATE['tokens_scanned_today']}\n"
+        f"• Сигналов отправлено сегодня: {SCANNER_STATE['signals_sent_today']}\n"
+        f"• Последний сигнал: {SCANNER_STATE['last_signal_time'] or '—'}\n"
+        f"• Последнее сканирование: {SCANNER_STATE['last_scan_time'] or '—'}"
     )
 
-    logger = logging.getLogger(__name__)
-    scan_interval_sec = 120
 
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    groq_url = "https://api.groq.com/openai/v1/chat/completions"
-    users_file = Path(__file__).resolve().parent / "users.json"
+def _reset_counters_daily() -> None:
+    today = datetime.now(timezone.utc).date().isoformat()
+    if SCANNER_STATE["day"] != today:
+        SCANNER_STATE["day"] = today
+        SCANNER_STATE["tokens_scanned_today"] = 0
+        SCANNER_STATE["signals_sent_today"] = 0
 
-    mem_scanner = MemecoinScanner()
-    security_checker = ContractSecurityChecker()
 
-    def safe_float(value: Any, default: float = 0.0) -> float:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
+def _entry_levels(price: float) -> tuple[float, float, float, float, float, float]:
+    """Вход1, Вход2, стоп (-15%), x2, x5, x10 от условной базы ~цена."""
+    p = max(price, 1e-18)
+    e1 = p * 0.99
+    e2 = p * 0.965
+    sl = p * 0.85
+    return e1, e2, sl, p * 2.0, p * 5.0, p * 10.0
 
-    def safe_int(value: Any, default: int = 0) -> int:
-        try:
-            return int(float(value))
-        except (TypeError, ValueError):
-            return default
 
-    def load_users() -> set[int]:
-        if not users_file.exists():
-            users_file.write_text("[]", encoding="utf-8")
-        try:
-            data = json.loads(users_file.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                return {int(x) for x in data if str(x).isdigit()}
-        except Exception as exc:
-            logger.error("Ошибка users.json: %s", exc)
-        return set()
+def _fmt_usd(v: float) -> str:
+    v = float(v)
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.2f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.2f}K"
+    if v >= 1:
+        return f"${v:,.2f}"
+    if v >= 0.0001:
+        return f"${v:.6f}"
+    return f"${v:.8f}"
 
-    def reset_counters_daily() -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
-        if SNIPER_LOOP_STATE["day"] != today:
-            SNIPER_LOOP_STATE["day"] = today
-            SNIPER_LOOP_STATE["tokens_scanned_today"] = 0
-            SNIPER_LOOP_STATE["signals_sent_today"] = 0
 
-    def fib_levels(price: float) -> tuple[float, float, float]:
-        price = max(price, 1e-10)
-        high = price * 1.25
-        low = price * 0.70
-        diff = high - low
-        e1 = high - 0.5 * diff
-        e2 = high - 0.618 * diff
-        return e1, e2, e1 * 0.85
-
-    async def ai_text(token: dict[str, Any], score: int) -> str:
-        if not groq_key:
-            return (
-                "Есть импульс по объёму и покупкам, но риск экстремально высокий. "
-                "Вход только микропозицией с жёстким стопом."
-            )
-        prompt = (
-            "Ты crypto analyst. Дай 2-3 предложения на русском: почему memecoin может пампить, "
-            "главный риск, и входить или ждать.\n"
-            f"Token: {token['symbol']} | chain: {token['chain']} | age_h: {token['age_hours']:.2f} | score: {score}"
+async def _ai_text_ru(token: dict[str, Any], score: int) -> str:
+    if not GROQ_API_KEY:
+        return (
+            "Ранний токен с высокой волатильностью: потенциал роста ограничен ликвидностью и риском скама. "
+            "Вход только микролотом и только после собственной проверки контракта."
         )
-        body = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 180,
-            "temperature": 0.3,
-        }
-        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-                async with session.post(groq_url, json=body, headers=headers) as resp:
-                    if resp.status != 200:
-                        return "Потенциал есть, но риски скама и дампа крайне высокие."
-                    data = await resp.json()
-                    return str(data["choices"][0]["message"]["content"]).strip()
-        except Exception:
-            return "Есть ранний импульс, но риск потери капитала очень высокий."
+    prompt = (
+        "Дай ровно 2 коротких предложения на русском для трейдеров Telegram о этом токене: "
+        "кратко риск и что смотреть (ликвидность/налоги). Без приветствий и без списков.\n"
+        f"Символ: {token.get('symbol')} | сеть: {token.get('chain')} | score: {score}/100 | "
+        f"капа USD: {token.get('market_cap')} | ликв.: {token.get('liquidity')} | vol24: {token.get('volume_24h')}"
+    )
+    body = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 120,
+        "temperature": 0.35,
+    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+            async with session.post(GROQ_API, json=body, headers=headers) as resp:
+                if resp.status != 200:
+                    return "Высокий риск из-за возраста токена и тонкой ликвидности; проверяй налоги и блокировку LP перед входом."
+                data = await resp.json()
+                return str(data["choices"][0]["message"]["content"]).strip()
+    except Exception:
+        return "Рынок нестабилен; любой вход в новые пары сопряжён с риском полной потери депозита."
 
-    def format_signal(token: dict[str, Any], security: dict[str, Any], ai_block: str) -> str:
-        e1, e2, sl = fib_levels(safe_float(token.get("price"), 0.0))
-        return f"""🚀 [MEME-SNIPER: СЕТАП ПОДТВЕРЖДЕН] ${token['symbol']}
 
-🐸 MEME ALPHA (Свежий Листинг)
-⚡ Статус: ✅ CONFLUENCE ACHIEVED
-🕐 Возраст: {int(safe_float(token['age_hours']))} часов {int((safe_float(token['age_hours']) % 1) * 60)} минут
-🌐 Сеть: {"ETHEREUM" if token['chain'] == 'ethereum' else 'SOLANA'}
+def _format_signal(token: dict[str, Any], security: dict[str, Any], ai_text: str, score: int) -> str:
+    chain = str(token.get("chain") or "")
+    chain_ru = "Ethereum" if chain == "ethereum" else "Solana"
+    dex_slug = "ethereum" if chain == "ethereum" else "solana"
+    contract = str(token.get("contract") or "")
+    dex_link = f"https://dexscreener.com/{dex_slug}/{contract}"
 
-📋 Контракт:
-`{token['contract']}`
-📊 [Открыть на DexScreener]({token['dex_url']})
+    price = _safe_float(token.get("price"))
+    if price <= 0:
+        price = _safe_float(token.get("market_cap")) / 1_000_000 or 1e-8
 
-💼 Экономика:
-└ Капа (MC): ${safe_float(token['market_cap']):,.0f}
-└ Ликвидность: ${safe_float(token['liquidity']):,.0f}
-└ Объём 1ч: ${safe_float(token['volume_1h']):,.0f}
-└ Vol/Liq: {safe_float(token['vol_liq_ratio']):.2f}x
+    age_h = _safe_float(token.get("age_hours"), 0.0)
+    age_txt = f"{max(1, int(age_h))} часов" if age_h >= 1 else f"{max(1, int(age_h * 60))} минут"
 
-📈 Давление покупок:
-└ Покупок: {safe_int(token['buys_1h'])} | Продаж: {safe_int(token['sells_1h'])}
-└ Тренд: {"🟢 БЫЧИЙ" if safe_int(token['buys_1h']) > safe_int(token['sells_1h']) else "🔴 МЕДВЕЖИЙ"}
+    mcap = _safe_float(token.get("market_cap"))
+    liq = _safe_float(token.get("liquidity"))
+    vol24 = _safe_float(token.get("volume_24h"))
+    vol_x = (vol24 / liq) if liq > 0 else _safe_float(token.get("vol_liq_ratio"))
 
-🛡️ Безопасность:
-└ Налог: BUY {safe_float(security['buy_tax']):.2f}% / SELL {safe_float(security['sell_tax']):.2f}%
-└ Honeypot: {"✅ НЕТ" if not security['is_honeypot'] else "🚨 ДА"}
-└ Холдеров: {safe_int(security['holder_count'])}
+    buy_tax = _safe_float(security.get("buy_tax"))
+    sell_tax = _safe_float(security.get("sell_tax"))
+    honeypot_ok = not bool(security.get("is_honeypot"))
+    honeypot_line = "✅ НЕТ" if honeypot_ok else "🚨 ДА"
+    lp_ok = bool(security.get("lp_locked"))
+    lp_line = "заблокирована ✅" if lp_ok else "не подтверждена ⚠️"
 
-🤖 AI Анализ (Groq):
-{ai_block}
+    e1, e2, sl, t2, t5, t10 = _entry_levels(price)
 
-🎯 ТОЧКИ ВХОДА:
-└ Вход 1 (0.5 Fib): ${e1:.8f} — 30% позиции
-└ Вход 2 (0.618 Fib): ${e2:.8f} — 70% позиции
+    sym = str(token.get("symbol") or "???").upper()
 
-🛑 СТОП-ЛОСС: ${sl:.8f} (-15% от входа 1)
+    return (
+        f"🚀 [MEME-SNIPER] ${sym} — Score: {score}/100\n\n"
+        f"🌐 Сеть: {chain_ru}\n"
+        f"🕐 Возраст: {age_txt}\n"
+        f"💰 Цена: {_fmt_usd(price)}\n"
+        f"📊 Капа: {_fmt_usd(mcap)} | Ликвидность: {_fmt_usd(liq)}\n"
+        f"📈 Объём 24ч: {_fmt_usd(vol24)} ({vol_x:.1f}x от ликвидности)\n\n"
+        f"📋 Контракт: `{contract}`\n"
+        f"🔗 [DexScreener]({dex_link})\n\n"
+        f"🛡️ Безопасность:\n"
+        f"└ Налог: {buy_tax:.1f}% / {sell_tax:.1f}%\n"
+        f"└ Холдеров: {_safe_int(security.get('holder_count'))}\n"
+        f"└ Honeypot: {honeypot_line}\n"
+        f"└ LP: {lp_line}\n\n"
+        f"🤖 AI: {ai_text}\n\n"
+        f"🎯 Точки входа:\n"
+        f"└ Вход 1: {_fmt_usd(e1)} (30% позиции)\n"
+        f"└ Вход 2: {_fmt_usd(e2)} (70% позиции)\n"
+        f"└ Стоп: {_fmt_usd(sl)} (-15%)\n\n"
+        f"🎯 Цели:\n"
+        f"└ x2: {_fmt_usd(t2)}\n"
+        f"└ x5: {_fmt_usd(t5)}\n"
+        f"└ x10: {_fmt_usd(t10)}\n\n"
+        f"⚠️ Риск: ВЫСОКИЙ. DYOR."
+    )
 
-🎯 ЦЕЛИ:
-└ x2: ${e1 * 2:.8f}
-└ x5: ${e1 * 5:.8f}
-└ x10: ${e1 * 10:.8f}
-└ x50: ${e1 * 50:.8f} (если нарратив взлетит)
 
-⚠️ Потенциал: x10-x1000
-⚠️ Риск: ОЧЕНЬ ВЫСОКИЙ. Входи только то что готов потерять полностью. DYOR."""
-
-    SNIPER_LOOP_STATE["running"] = True
+async def scanner_loop(bot: Any) -> None:
+    """Один цикл на всех пользователей: только bot.py вызывает start_polling; здесь нет Bot/Dispatcher."""
+    SCANNER_STATE["running"] = True
     seen_tokens = load_seen_tokens()
-
     while True:
-        reset_counters_daily()
-        SNIPER_LOOP_STATE["last_scan_time"] = datetime.now(timezone.utc).isoformat()
+        _reset_counters_daily()
+        SCANNER_STATE["last_scan_time"] = datetime.now(timezone.utc).isoformat()
         try:
-            raw = await mem_scanner.fetch_sources()
-            candidates = mem_scanner.prefilter_memecoins(raw, seen_tokens)
+            raw = await scanner.fetch_sources_sequential()
+            candidates = scanner.prefilter_memecoins(raw, seen_tokens)
             for token in candidates:
                 uid = token_uid(token["chain"], token["contract"])
                 if uid in seen_tokens:
                     continue
                 seen_tokens.add(uid)
                 save_seen_tokens(seen_tokens)
-                SNIPER_LOOP_STATE["tokens_scanned_today"] += 1
+                SCANNER_STATE["tokens_scanned_today"] += 1
 
                 chain_id = "1" if token["chain"] == "ethereum" else "solana"
-                security = await security_checker.check_contract_security(token["contract"], chain_id)
-                if security["is_honeypot"]:
+                try:
+                    security = await checker.check_contract_security(token["contract"], chain_id)
+                except Exception as exc:
+                    logger.error("GoPlus %s: %s", uid, exc)
                     continue
-                if safe_float(security["buy_tax"]) > mem_scanner.filters["max_buy_tax"] or safe_float(
-                    security["sell_tax"]
-                ) > mem_scanner.filters["max_sell_tax"]:
+
+                if security.get("is_honeypot"):
+                    continue
+                if _safe_float(security.get("sell_tax")) >= 10.0:
                     continue
 
                 score = calculate_x1000_score(token, security)
-                if score < mem_scanner.filters["min_score"]:
+                if score < 50:
                     continue
 
-                message = format_signal(token, security, await ai_text(token, score))
-                for user_id in load_users():
+                ai_text = await _ai_text_ru(token, score)
+                message = _format_signal(token, security, ai_text, score)
+                users = load_users()
+                sent_any = False
+                for user_id in users:
                     try:
                         await bot.send_message(
                             chat_id=user_id,
@@ -189,14 +237,15 @@ async def scanner_loop(bot) -> None:
                             parse_mode="Markdown",
                             disable_web_page_preview=True,
                         )
-                        SNIPER_LOOP_STATE["signals_sent_today"] += 1
-                        SNIPER_LOOP_STATE["last_signal_time"] = datetime.now(timezone.utc).isoformat()
-                        await asyncio.sleep(0.05)
+                        sent_any = True
+                        await asyncio.sleep(0.08)
                     except Exception as exc:
                         logger.error("Ошибка отправки %s: %s", user_id, exc)
+                if sent_any:
+                    SCANNER_STATE["signals_sent_today"] += 1
+                    SCANNER_STATE["last_signal_time"] = datetime.now(timezone.utc).isoformat()
                 await asyncio.sleep(1.5)
         except Exception as exc:
-            SNIPER_LOOP_STATE["last_error"] = str(exc)
+            SCANNER_STATE["last_error"] = str(exc)
             logger.error("Ошибка scanner_loop: %s", exc)
-
-        await asyncio.sleep(scan_interval_sec)
+        await asyncio.sleep(120)

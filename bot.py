@@ -17,8 +17,7 @@ from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
 from alerts import AlertManager
-from scanner import get_sniper_status_text
-from sniper import scanner_loop
+from sniper import scanner_loop, get_sniper_status_text
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -27,8 +26,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
 ENTRY_WAITING_USERS: set[int] = set()
 
@@ -54,9 +54,8 @@ def load_users() -> set[int]:
 
 def save_user_id(user_id: int) -> None:
     users = load_users()
-    if user_id not in users:
-        users.add(user_id)
-        USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
+    users.add(user_id)
+    USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
 
 # ─── KEYBOARDS ────────────────────────────────────────────────────────────────
 
@@ -409,59 +408,33 @@ async def check_alerts_loop(bot_instance: Bot):
             logger.error(f"Alert check error: {e}")
         await asyncio.sleep(60)
 
-async def auto_scan_loop(bot_instance: Bot):
+async def auto_broadcast_loop(bot_instance: Bot) -> None:
+    """Каждые 6 часов: топ-3 сигнала на покупку + 2 гема всем пользователям."""
+    await asyncio.sleep(120)
     while True:
         try:
-            users = load_users()
-            if users:
-                strong = await analyzer.get_top_strong_buys(limit=200, threshold=40)
-                if strong:
-                    lines = ["🚨 *Auto Scan: сильные возможности (Score >= 40)*\n"]
-                    for coin in strong[:5]:
-                        lines.append(
-                            f"🟢 *{coin['symbol']}* ({coin['name']}) — Score `{coin['score']}` | "
-                            f"{coin['change_24h']:+.1f}% | {coin['price']:.6f}$"
-                        )
-                    msg = "\n".join(lines)
-                    for user_id in users:
-                        try:
-                            await bot_instance.send_message(user_id, msg, parse_mode="Markdown")
-                        except Exception:
-                            continue
+            text = await analyzer.auto_broadcast_message()
+            if not text:
+                await asyncio.sleep(21_600)
+                continue
+            for user_id in load_users():
+                try:
+                    await bot_instance.send_message(user_id, text, parse_mode="Markdown")
+                except Exception as exc:
+                    logger.error("auto_broadcast send %s: %s", user_id, exc)
+        except Exception as exc:
+            logger.error("auto_broadcast_loop: %s", exc)
+        await asyncio.sleep(21_600)
 
-                gems = await analyzer.find_gems()
-                if "Score `70" in gems or "Score `8" in gems or "Score `9" in gems:
-                    alert = "💎 *AUTO GEM ALERT*\nНайдены gems с очень высоким score.\n\n" + gems
-                    for user_id in users:
-                        try:
-                            await bot_instance.send_message(user_id, alert, parse_mode="Markdown")
-                        except Exception:
-                            continue
-
-                top_coins = await analyzer._get_market_snapshot(20)
-                for coin in top_coins:
-                    entry = await analyzer.detect_entry_signal(coin["symbol"])
-                    if len(entry.get("patterns", [])) >= 3:
-                        details = "\n".join([f"• {p['name']} ({p['type']})" for p in entry["patterns"][:4]])
-                        entry_alert = (
-                            f"⚡ *ENTRY ALERT*: {coin['symbol']}\n"
-                            f"Обнаружено {len(entry['patterns'])} паттерна(ов) входа.\n{details}"
-                        )
-                        for user_id in users:
-                            try:
-                                await bot_instance.send_message(user_id, entry_alert, parse_mode="Markdown")
-                            except Exception:
-                                continue
-        except Exception as e:
-            logger.error(f"Auto scan error: {e}")
-        await asyncio.sleep(21600)
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 async def main():
     ensure_users_file()
     if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY не задан. AI-анализ Claude будет недоступен.")
+        logger.warning("ANTHROPIC_API_KEY не задан — блок Claude (если используется) недоступен.")
+    if not GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY не задан — AI-анализ Groq будет с заглушками.")
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN не задан. Укажи токен в переменных окружения Railway или терминала.")
 
@@ -472,7 +445,7 @@ async def main():
         raise RuntimeError("BOT_TOKEN невалидный. Получи новый токен у BotFather и обнови переменную окружения.") from exc
     logger.info("Bot started. Polling...")
     asyncio.create_task(check_alerts_loop(bot))
-    asyncio.create_task(auto_scan_loop(bot))
+    asyncio.create_task(auto_broadcast_loop(bot))
     asyncio.create_task(scanner_loop(bot))
     await dp.start_polling(bot)
 

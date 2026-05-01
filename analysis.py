@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import statistics
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ COINGECKO = "https://api.coingecko.com/api/v3"
 DEFILLAMA = "https://api.llama.fi"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
 
 MEME_KEYWORDS = [
     "pepe", "doge", "shib", "floki", "bonk", "wif", "cat", "dog", "frog", "moon", "ape",
@@ -35,59 +38,78 @@ DEFI_KEYWORDS = [
     "aave", "curve", "maker", "compound", "dydx", "gmx", "pendle",
 ]
 
-SYMBOL_MAP = {
-    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
-    "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
-    "AVAX": "avalanche-2", "DOT": "polkadot", "MATIC": "matic-network",
-    "ATOM": "cosmos", "NEAR": "near", "ICP": "internet-computer",
-    "FIL": "filecoin", "TRX": "tron", "TON": "the-open-network",
-    "LTC": "litecoin", "BCH": "bitcoin-cash", "XMR": "monero",
-    "XLM": "stellar", "VET": "vechain", "HBAR": "hedera-hashgraph",
-    "ALGO": "algorand", "XTZ": "tezos", "EOS": "eos",
-    "FLOW": "flow", "EGLD": "elrond-erd-2", "ZEC": "zcash",
-    "DASH": "dash", "ZIL": "zilliqa", "WAVES": "waves",
-    "NEO": "neo", "IOTA": "iota", "CFX": "conflux-token",
-    "ROSE": "oasis-network", "STX": "blockstack", "KAVA": "kava",
-    "OP": "optimism", "ARB": "arbitrum", "STRK": "starknet",
-    "TIA": "celestia", "MANTA": "manta-network", "ZETA": "zetachain",
-    "DYM": "dymension", "IMX": "immutable-x",
-    "RENDER": "render-token", "RNDR": "render-token",
-    "FET": "fetch-ai", "TAO": "bittensor",
-    "WLD": "worldcoin-wld", "AIOZ": "aioz-network",
-    "VIRTUAL": "virtual-protocol", "ARKM": "arkham",
-    "GRT": "the-graph", "OCEAN": "ocean-protocol",
+try:
+    from _symbol_map_generated import SYMBOL_MAP_COINGECKO as _SYMBOL_MAP_BASE
+except ImportError:
+    _SYMBOL_MAP_BASE = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
+
+# Приоритет: явные id для мемов / листингов / конфликтных тикеров (620+ из CoinGecko markets + оверрайды)
+SYMBOL_OVERRIDES: dict[str, str] = {
+    "MATIC": "matic-network",
+    "RNDR": "render-token",
+    "RENDER": "render-token",
+    "MEW": "cat-in-a-dogs-world",
+    "WIF": "dogwifcoin",
+    "BONK": "bonk",
+    "PEPE": "pepe",
+    "SHIB": "shiba-inu",
+    "DOGE": "dogecoin",
+    "FLOKI": "floki",
+    "POPCAT": "popcat",
+    "PNUT": "peanut-the-squirrel",
+    "NEIRO": "neiro-on-eth",
+    "TURBO": "turbo",
+    "MOG": "mog-coin",
+    "BRETT": "based-brett",
+    "GOAT": "goatseus-maximus",
+    "ACT": "act-i-the-ai-prophet",
+    "BANANA": "banana-gun",
+    "LADYS": "milady-meme-coin",
+    "WOJAK": "wojak",
+    "CHAD": "chad-coin",
+    "BILLY": "billy",
+    "SLERF": "slerf",
+    "BOME": "book-of-meme",
+    "ZERO": "zero-2",
+    "GIGA": "gigachad-2",
+    "PONKE": "ponke",
+    "MYRO": "myro-2",
+    "SILLY": "silly-dragon",
+    "RETARDIO": "retardio",
+    "MICHI": "michi",
+    "NMR": "numeraire",
+    "CTXC": "cortex",
+    "ZKS": "zksync",
+    "SCROLL": "scroll",
+    "SAMO": "samoyedcoin",
+    "PVU": "plant-vs-undead-token",
+    "NAKA": "nakamoto-games",
+    "HERO": "metahero",
+    "HMSTR": "hamster-kombat",
+    "CATI": "catizen",
+    "MAJOR": "major",
+    "BLUM": "blum-2",
+    "DOGS": "dogs-2",
+    "LISTA": "lista-dao",
+    "ZRO": "layerzero",
+    "ETHFI": "ether-fi",
+    "EIGEN": "eigenlayer",
+    "REZ": "renzo",
+    "SAGA": "saga-2",
+    "PORTAL": "portal-2",
+    "PIXEL": "pixels",
+    "ALT": "altlayer",
     "AGIX": "singularitynet",
-    "LINK": "chainlink", "UNI": "uniswap", "AAVE": "aave",
-    "CRV": "curve-dao-token", "MKR": "maker", "SNX": "havven",
-    "COMP": "compound-governance-token", "1INCH": "1inch",
-    "SUSHI": "sushi", "YFI": "yearn-finance", "BAL": "balancer",
-    "LDO": "lido-dao", "RUNE": "thorchain", "CAKE": "pancakeswap-token",
-    "GMX": "gmx", "DYDX": "dydx", "PENDLE": "pendle",
-    "ENA": "ethena", "BAND": "band-protocol", "ANKR": "ankr",
-    "SKL": "skale", "STORJ": "storj", "ZRX": "0x",
-    "BAT": "basic-attention-token", "ENJ": "enjincoin",
-    "SAND": "the-sandbox", "MANA": "decentraland",
-    "SUI": "sui", "APT": "aptos", "SEI": "sei-network",
-    "JUP": "jupiter-exchange-solana", "JTO": "jito-governance-token",
-    "PYTH": "pyth-network", "WIF": "dogwifcoin", "BONK": "bonk",
-    "ORCA": "orca", "RAY": "raydium",
-    "PEPE": "pepe", "SHIB": "shiba-inu", "FLOKI": "floki",
-    "POPCAT": "popcat", "PNUT": "peanut-the-squirrel",
-    "MOG": "mog-coin", "NEIRO": "neiro-on-eth",
-    "PENGU": "pudgy-penguins", "TRUMP": "official-trump",
-    "MELANIA": "melania-meme", "BRETT": "based-brett",
-    "TURBO": "turbo", "DOGE": "dogecoin",
-    "AXS": "axie-infinity", "GALA": "gala",
-    "MAGIC": "magic", "BLUR": "blur",
-    "ENS": "ethereum-name-service", "ILV": "illuvium",
-    "FTM": "fantom", "INJ": "injective-protocol",
-    "CRO": "crypto-com-chain", "OKB": "okb",
-    "KCS": "kucoin-shares", "LUNA": "terra-luna-2",
-    "LUNC": "terra-luna", "HOT": "holotoken",
-    "CHZ": "chiliz", "THETA": "theta-token",
-    "ONE": "harmony", "CELO": "celo",
-    "GLMR": "moonbeam", "KSM": "kusama",
+    "OCEAN": "ocean-protocol",
+    "RDNT": "radiant-capital",
+    "VELA": "vela-token",
+    "GNS": "gains-network",
+    "METIS": "metis-token",
+    "BOBA": "boba-network",
+    "STRK": "starknet",
 }
+
+SYMBOL_MAP: dict[str, str] = {**_SYMBOL_MAP_BASE, **SYMBOL_OVERRIDES}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -311,14 +333,14 @@ class CryptoAnalyzer:
         return None
 
     async def _resolve_id(self, symbol: str) -> str:
-        if symbol.upper() in SYMBOL_MAP:
-            return SYMBOL_MAP[symbol.upper()]
+        sym_u = symbol.upper().strip()
+        if sym_u in SYMBOL_MAP:
+            return SYMBOL_MAP[sym_u]
         data = await self._get_json(f"{COINGECKO}/search", {"query": symbol})
         if data and data.get("coins"):
-            for coin in data["coins"][:5]:
-                if coin.get("symbol", "").upper() == symbol.upper():
-                    return coin["id"]
-            return data["coins"][0]["id"]
+            for coin in data["coins"]:
+                if (coin.get("symbol") or "").upper() == sym_u:
+                    return str(coin["id"])
         return symbol.lower()
 
     async def _get_prices(self, coin_id: str, days: int = 60) -> list[float]:
@@ -388,6 +410,7 @@ class CryptoAnalyzer:
         change_1h = safe_float(coin.get("price_change_percentage_1h_in_currency"))
         change_24h = safe_float(coin.get("price_change_percentage_24h"))
         change_7d = safe_float(coin.get("price_change_percentage_7d_in_currency"))
+        change_30d = safe_float(coin.get("price_change_percentage_30d_in_currency"))
         vol_ratio = (volume / market_cap) if market_cap else 0.0
         rsi = market_rsi_proxy(change_1h, change_24h, change_7d, vol_ratio)
 
@@ -402,6 +425,7 @@ class CryptoAnalyzer:
             "change_1h": change_1h,
             "change_24h": change_24h,
             "change_7d": change_7d,
+            "change_30d": change_30d,
             "ath": safe_float(coin.get("ath")),
             "vol_ratio": vol_ratio,
             "rsi": rsi,
@@ -555,10 +579,43 @@ class CryptoAnalyzer:
             "tp3": tp3,
         }
 
+    async def _groq_ru(self, prompt: str, max_tokens: int = 220) -> str:
+        if not GROQ_API_KEY:
+            return ""
+        body = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.35,
+        }
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    GROQ_API,
+                    json=body,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=35),
+                ) as response:
+                    if response.status != 200:
+                        return ""
+                    result = await response.json()
+                    return str(result["choices"][0]["message"]["content"]).strip()
+        except Exception:
+            return ""
+
     async def get_ai_analysis(self, symbol: str, data: dict[str, Any]) -> str:
+        prompt = (
+            f"Ты криптоаналитик. Кратко 2–3 полных предложения на русском по {symbol}: вход/ожидание, риски, что подтвердить.\n"
+            f"Цена ${data['price']}, RSI {data['rsi']}, MACD {data['macd']}, 24ч {data['change_24h']}%, 7д {data['change_7d']}%, "
+            f"Vol/MCap {data['vol_ratio']}%, F&G {data['fear_greed']}, TVL {data['tvl']}."
+        )
+        g = await self._groq_ru(prompt, max_tokens=260)
+        if g:
+            return g
         if not ANTHROPIC_API_KEY:
-            return "Ключ ANTHROPIC_API_KEY не задан, AI-анализ недоступен."
-        prompt = f"""You are a professional crypto trader. Analyze {symbol}:
+            return "AI недоступен: задай GROQ_API_KEY или ANTHROPIC_API_KEY в окружении."
+        claude_prompt = f"""You are a professional crypto trader. Analyze {symbol}:
 Price: ${data['price']}
 RSI: {data['rsi']}
 MACD: {data['macd']}
@@ -581,7 +638,7 @@ Be honest and specific. No generic advice."""
         body = {
             "model": "claude-opus-4-5",
             "max_tokens": 500,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": claude_prompt}],
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -625,7 +682,7 @@ Be honest and specific. No generic advice."""
                             "per_page": per_page,
                             "page": page,
                             "sparkline": "false",
-                            "price_change_percentage": "1h,24h,7d",
+                            "price_change_percentage": "1h,24h,7d,30d",
                         },
                     )
                 )
@@ -962,6 +1019,111 @@ Be honest and specific. No generic advice."""
         strong.sort(key=lambda item: item["score"], reverse=True)
         return strong[:10]
 
+    async def _get_btc_dominance(self) -> Optional[float]:
+        try:
+            g = await self._get_json(f"{COINGECKO}/global")
+            if not g:
+                return None
+            pct = ((g.get("data") or {}).get("market_cap_percentage") or {}).get("btc")
+            return safe_float(pct) if pct is not None else None
+        except Exception:
+            return None
+
+    async def _pick_gems_for_broadcast(self, n: int = 2) -> list[dict[str, Any]]:
+        try:
+            trending = await self._get_json(f"{COINGECKO}/search/trending")
+            trending_ids = {
+                item.get("item", {}).get("id", "")
+                for item in (trending or {}).get("coins", [])
+                if item.get("item", {}).get("id")
+            }
+            lowcap = await self._get_json(
+                f"{COINGECKO}/coins/markets",
+                {
+                    "vs_currency": "usd",
+                    "order": "id_asc",
+                    "per_page": 120,
+                    "page": 6,
+                    "sparkline": "false",
+                    "price_change_percentage": "24h,7d",
+                },
+            )
+            scored: list[tuple[dict[str, Any], dict[str, Any], int]] = []
+            for coin in lowcap or []:
+                mcap = safe_float(coin.get("market_cap"))
+                if mcap <= 0 or mcap >= 150_000_000:
+                    continue
+                gem = self.calculate_gem_score(coin)
+                if gem["score"] < 42:
+                    continue
+                bonus = 6 if coin.get("id") in trending_ids else 0
+                scored.append((coin, gem, gem["score"] + bonus))
+            scored.sort(key=lambda x: x[2], reverse=True)
+            plat_map = {
+                "solana": "Solana",
+                "ethereum": "Ethereum",
+                "binance-smart-chain": "BSC",
+                "base": "Base",
+                "arbitrum-one": "Arbitrum",
+            }
+            out: list[dict[str, Any]] = []
+            for coin, gem, _ in scored:
+                sym = coin.get("symbol", "").upper()
+                if sym in {"BTC", "ETH", "SOL", "USDT", "USDC", "BNB", "STETH"}:
+                    continue
+                mcap = safe_float(coin.get("market_cap"))
+                plat_raw = str(coin.get("asset_platform_id") or "")
+                chain = plat_map.get(plat_raw.lower(), plat_raw or "—")
+                pot = gem["potential"].replace("🚀", "").replace("📈", "").replace("📊", "").strip()
+                out.append({"symbol": sym, "chain": chain, "score": gem["score"], "pot": pot, "mcap": mcap})
+                if len(out) >= n:
+                    break
+            return out
+        except Exception:
+            return []
+
+    async def auto_broadcast_message(self) -> str:
+        try:
+            now = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+            coins = await self._get_market_snapshot(100)
+            if not coins:
+                return ""
+            fg = await self._get_fear_greed()
+            ranked: list[tuple[dict[str, Any], int]] = []
+            for c in coins:
+                st, sc = self._coin_signal(c, fg["value"])
+                if st == "buy":
+                    ranked.append((c, sc))
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            top3 = ranked[:3]
+            lines = [f"🔔 АВТО-СКАНЕР — [{now}]\n", "🟢 ТОП СИГНАЛЫ НА ПОКУПКУ:"]
+            if not top3:
+                lines.append("— Сейчас мало явных buy-сигналов в топ-100 по правилам бота.")
+            for i, (c, sc) in enumerate(top3, 1):
+                p = c["price"]
+                rsi = c["rsi"]
+                entry = p
+                stp = p * 0.93
+                tgt = p * 1.2
+                lines.append(
+                    f"{i}. {c['symbol']} — RSI {rsi:.0f}, Score {sc} | Вход {fmt_price(entry)} | Стоп {fmt_price(stp)} | Цель {fmt_price(tgt)}"
+                )
+            gems = await self._pick_gems_for_broadcast(2)
+            lines.append("")
+            lines.append("💎 GEM FINDER:")
+            if gems:
+                for g in gems:
+                    lines.append(
+                        f"- {g['symbol']} ({g['chain']}) — Score {g['score']}, {g['pot']}, Капа {fmt_b(g['mcap'])}"
+                    )
+            else:
+                lines.append("- Гемы по фильтрам не найдены — попробуй позже.")
+            lines.append("")
+            lines.append("📱 Подробный анализ: просто напиши символ монеты")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
     def _build_snapshot_analysis(
         self,
         coin: dict[str, Any],
@@ -1016,9 +1178,10 @@ Be honest and specific. No generic advice."""
         prices_task = self._get_prices(coin_id, 60)
         fear_greed_task = self._get_fear_greed()
         defi_task = self._get_defi_llama(symbol)
+        btc_dom_task = self._get_btc_dominance()
 
-        data, prices, fg, defi = await asyncio.gather(
-            market_task, prices_task, fear_greed_task, defi_task
+        data, prices, fg, defi, btc_dom = await asyncio.gather(
+            market_task, prices_task, fear_greed_task, defi_task, btc_dom_task
         )
 
         snapshot_coin = await self._find_snapshot_coin(symbol, coin_id)
@@ -1035,12 +1198,15 @@ Be honest and specific. No generic advice."""
         price = safe_float(md["current_price"]["usd"])
         cap = safe_float(md["market_cap"]["usd"])
         volume = safe_float(md["total_volume"]["usd"])
+        change_1h = safe_float(md.get("price_change_percentage_1h_in_currency"))
         change_24h = safe_float(md.get("price_change_percentage_24h"))
         change_7d = safe_float(md.get("price_change_percentage_7d"))
         change_30d = safe_float(md.get("price_change_percentage_30d"))
         ath = safe_float(md["ath"]["usd"])
         ath_change = safe_float((md.get("ath_change_percentage") or {}).get("usd"))
         vol_ratio = (volume / cap) if cap > 0 else 0
+        rank = data.get("market_cap_rank")
+        rank_txt = f"#{rank}" if rank else "—"
 
         rsi = calc_rsi(prices) if len(prices) >= 15 else (snapshot_coin["rsi"] if snapshot_coin else 50.0)
         macd_val, macd_signal, macd_hist = calc_macd(prices) if len(prices) >= 30 else (None, None, None)
@@ -1067,8 +1233,32 @@ Be honest and specific. No generic advice."""
         fear_value = fg["value"]
         fear_emoji = "😱" if fear_value < 25 else "😨" if fear_value < 45 else "😐" if fear_value < 55 else "😊" if fear_value < 75 else "🤑"
 
-        macd_text = f"`{macd_val}` (гист: `{macd_hist}`)" if macd_val is not None else "N/A"
-        bb_text = f"`{fmt_price(bb_low)}` / `{fmt_price(bb_mid)}` / `{fmt_price(bb_high)}`" if bb_low else "N/A"
+        macd_bias = "Медвежий ↘️" if (macd_hist or 0) < 0 else "Бычий ↗️"
+        macd_hist_txt = f"{macd_hist:+.6f}" if macd_hist is not None else "n/a"
+        macd_line = f"MACD: {macd_bias} (гист: `{macd_hist_txt}`)" if macd_val is not None else "MACD: недостаточно данных"
+
+        if bb_low and bb_mid and bb_high and price > 0:
+            span = bb_high - bb_low
+            pos = (price - bb_low) / span if span else 0.5
+            if pos < 0.25:
+                bb_pos = "Нижняя зона канала"
+            elif pos > 0.75:
+                bb_pos = "Верхняя зона канала"
+            else:
+                bb_pos = "Середина канала"
+        else:
+            bb_pos = "Нет данных"
+
+        vmc_pct = vol_ratio * 100
+        if vmc_pct < 2:
+            vol_comment = "низкий"
+        elif vmc_pct < 10:
+            vol_comment = "нормальный"
+        else:
+            vol_comment = "повышенный"
+
+        ath_drop_pct = ((price - ath) / ath * 100) if ath > 0 else 0.0
+        score_ui = int(clamp((signal_data["score"] + 100) / 2, 0, 100))
 
         ai_text = await self.get_ai_analysis(
             symbol.upper(),
@@ -1084,65 +1274,78 @@ Be honest and specific. No generic advice."""
             },
         )
 
-        lines = [
-            f"📊 *{data['name']} ({symbol.upper()})*",
-            "",
-            f"💰 Цена: *{fmt_price(price)}*",
-            f"📈 24ч: *{change_24h:+.2f}%* | 7д: *{change_7d:+.2f}%* | 30д: *{change_30d:+.2f}%*",
-            f"🏦 Капитализация: *{fmt_b(cap)}*",
-            f"📦 Объём 24ч: *{fmt_b(volume)}* ({vol_ratio * 100:.1f}% от капы)",
-            f"🏆 ATH: *{fmt_price(ath)}* ({ath_change:.1f}%)",
-            "",
-            "━━━ Индикаторы ━━━",
-            f"RSI(14): `{rsi}` — {rsi_signal(rsi)}",
-            f"MACD: {macd_text}",
-            f"Bollinger: {bb_text}",
-        ]
-
+        ema_trend = ""
         if ema20_val and ema50_val:
-            trend = "📈 Бычий" if ema20_val > ema50_val else "📉 Медвежий"
-            lines.append(f"*EMA 20/50:* `{fmt_price(ema20_val)}` / `{fmt_price(ema50_val)}` — {trend}")
+            ema_trend = "📈 Бычий" if ema20_val > ema50_val else "📉 Медвежий"
 
-        lines += ["", "━━━ Ончейн ━━━", f"{fear_emoji} Fear & Greed: `{fear_value}` — {fg['label']}"]
+        entry_low = min(price, signal_data["entry"]) * 0.998
+        entry_high = max(price, signal_data["entry"]) * 1.002
+        pct_sl = ((signal_data["stop_loss"] - price) / price * 100) if price else 0
+        pct_tp1 = ((signal_data["tp1"] - price) / price * 100) if price else 0
+        pct_tp2 = ((signal_data["tp2"] - price) / price * 100) if price else 0
+        pct_tp3 = ((signal_data["tp3"] - price) / price * 100) if price else 0
 
+        lines = [
+            f"📊 *{data['name']} ({symbol.upper()})* {rank_txt}",
+            "",
+            f"💰 Цена: {fmt_price(price)}",
+            f"📈 1ч: {change_1h:+.1f}% | 24ч: {change_24h:+.1f}% | 7д: {change_7d:+.1f}% | 30д: {change_30d:+.1f}%",
+            f"🏦 Капа: {fmt_b(cap)} | Объём: {fmt_b(volume)}",
+            f"📉 От ATH: {ath_drop_pct:+.1f}% | ATH: {fmt_price(ath)}",
+            "",
+            "━━━ ТЕХНИЧЕСКИЙ АНАЛИЗ ━━━",
+            f"RSI (14): {rsi} — {rsi_signal(rsi)}",
+            macd_line,
+            f"Bollinger: {bb_pos}",
+        ]
+        if ema20_val and ema50_val:
+            lines.append(f"EMA 20: {fmt_price(ema20_val)} | EMA 50: {fmt_price(ema50_val)}")
+            lines.append(f"Тренд EMA: {ema_trend}")
+
+        lines += [
+            "",
+            "━━━ ОБЪЁМ И ЛИКВИДНОСТЬ ━━━",
+            f"Vol/MCap: {vmc_pct:.1f}% ({vol_comment})",
+        ]
+        if btc_dom is not None:
+            lines.append(f"Доминация BTC: {btc_dom:.1f}%")
+
+        lines += [
+            "",
+            "━━━ ОНЧЕЙН ━━━",
+            f"{fear_emoji} Fear & Greed: {fear_value} — {fg['label']}",
+        ]
         if defi.get("tvl"):
             tvl_change = safe_float(defi.get("tvl_change"))
             tvl_text = f"+{tvl_change:.1f}%" if tvl_change >= 0 else f"{tvl_change:.1f}%"
-            lines.append(f"🏊 *TVL (DeFiLlama):* {fmt_b(defi['tvl'])} ({tvl_text} за 24ч)")
-            if defi.get("flows") is not None:
-                flow_emoji = "📥" if defi["flows"] >= 0 else "📤"
-                lines.append(f"{flow_emoji} *Потоки ликвидности (7д):* {fmt_b(abs(defi['flows']))}")
-
-        sentiment = data.get("sentiment_votes_up_percentage")
-        developer_score = data.get("developer_score")
-        if sentiment:
-            lines.append(f"💬 *Настроение рынка:* `{sentiment:.0f}%` позитивных")
-        if developer_score:
-            lines.append(f"👨‍💻 *Dev Score:* `{developer_score:.1f}/100`")
+            lines.append(f"🏊 TVL: {fmt_b(defi['tvl'])} ({tvl_text} к дню)")
 
         lines += [
             "",
-            "━━━ Сигнал ━━━",
-            f"{signal_data['signal']} *(Score: {signal_data['score']}/100)*",
+            f"━━━ СИГНАЛ (Score: {score_ui}/100) ━━━",
+            signal_data["signal"],
+            "",
             "Причины:",
         ]
-        for reason in signal_data["reasons"]:
-            lines.append(f"• {reason}")
+        for reason in signal_data["reasons"][:6]:
+            lines.append(f"- {reason}")
+
         lines += [
             "",
-            "Точки:",
-            f"🎯 Вход: *{fmt_price(signal_data['entry'])}*",
-            f"🛑 SL: *{fmt_price(signal_data['stop_loss'])}*",
-            f"✅ TP1: *{fmt_price(signal_data['tp1'])}*",
-            f"✅ TP2: *{fmt_price(signal_data['tp2'])}*",
-            f"✅ TP3: *{fmt_price(signal_data['tp3'])}*",
+            "━━━ ТОЧКИ ━━━",
+            f"🎯 Вход: {fmt_price(entry_low)} – {fmt_price(entry_high)}",
+            f"🛑 Стоп: {fmt_price(signal_data['stop_loss'])} ({pct_sl:+.0f}%)",
+            f"✅ TP1: {fmt_price(signal_data['tp1'])} ({pct_tp1:+.0f}%)",
+            f"✅ TP2: {fmt_price(signal_data['tp2'])} ({pct_tp2:+.0f}%)",
+            f"✅ TP3: {fmt_price(signal_data['tp3'])} ({pct_tp3:+.0f}%)",
             "",
-            "🤖 *AI Анализ (Claude):*",
-            ai_text,
+            "━━━ AI АНАЛИЗ (Groq) ━━━",
+            f"🤖 {ai_text}",
         ]
 
         if vol_ratio > 0.3:
-            lines.append("\n⚠️ *Аномально высокий объём! Возможна манипуляция.*")
+            lines.append("")
+            lines.append("⚠️ Аномально высокий объём относительно капы — осторожность с размером позиции.")
 
         return "\n".join(lines)
 
@@ -1225,54 +1428,114 @@ Be honest and specific. No generic advice."""
         return "\n".join(lines)
 
     async def find_new_potential(self) -> str:
-        coins = await self._get_market_snapshot(220)
-        if not coins:
-            return "❌ Ошибка загрузки. Попробуй позже."
-
-        results = []
-        for coin in coins:
-            if coin["market_cap"] < 10_000_000:
-                continue
-
-            score = 0
-            if 20 <= (coin["rank"] or 9999) <= 180:
-                score += 2
-            if coin["market_cap"] >= 100_000_000:
-                score += 1
-            if coin["vol_ratio"] >= 0.14:
-                score += 2
-            elif coin["vol_ratio"] >= 0.08:
-                score += 1
-            if coin["change_24h"] > 4:
-                score += 1
-            if coin["change_7d"] > 8:
-                score += 2
-            elif coin["change_7d"] > 2:
-                score += 1
-            if coin["rsi"] < 66:
-                score += 1
-
-            if score >= 4:
-                results.append({**coin, "score": score})
-
-        results.sort(
-            key=lambda coin: (coin["score"], coin["vol_ratio"], coin["change_7d"], -(coin["rank"] or 9999)),
-            reverse=True,
-        )
-        if not results:
-            return "❌ Ошибка загрузки. Попробуй позже."
-
-        lines = [
-            "🚀 *Монеты с потенциалом роста*\n",
-            "_Критерии: тренд + объём + капитализация_\n",
-        ]
-        for coin in results[:10]:
-            lines.append(
-                f"✨ *{coin['symbol']}* — {fmt_price(coin['price'])} | {coin['change_24h']:+.1f}% | "
-                f"Кап: {fmt_b(coin['market_cap'])} | Vol: {coin['vol_ratio'] * 100:.0f}% | score `{coin['score']}`"
+        """Тренды + гейнеры + «дальняя» страница — разнообразные монеты при каждом запросе."""
+        try:
+            fg, trending, gainers, obscure = await asyncio.gather(
+                self._get_fear_greed(),
+                self._get_json(f"{COINGECKO}/search/trending"),
+                self._get_json(
+                    f"{COINGECKO}/coins/markets",
+                    {
+                        "vs_currency": "usd",
+                        "order": "percent_change_24h_desc",
+                        "per_page": 50,
+                        "page": 1,
+                        "sparkline": "false",
+                        "price_change_percentage": "24h,7d",
+                    },
+                ),
+                self._get_json(
+                    f"{COINGECKO}/coins/markets",
+                    {
+                        "vs_currency": "usd",
+                        "order": "id_asc",
+                        "per_page": 100,
+                        "page": 5,
+                        "sparkline": "false",
+                        "price_change_percentage": "24h,7d",
+                    },
+                ),
             )
-        lines.append("\n_/analyze SYMBOL для анализа_")
-        return "\n".join(lines)
+            picks: list[dict[str, Any]] = []
+            seen_syms: set[str] = set()
+
+            for item in (trending or {}).get("coins", [])[:12]:
+                it = item.get("item") or {}
+                cid = it.get("id")
+                if not cid:
+                    continue
+                detail = await self._get_json(
+                    f"{COINGECKO}/coins/markets",
+                    {"vs_currency": "usd", "ids": cid, "sparkline": "false", "price_change_percentage": "24h,7d"},
+                )
+                if not detail:
+                    continue
+                c = detail[0]
+                sym = str(c.get("symbol", "")).upper()
+                if sym in seen_syms:
+                    continue
+                seen_syms.add(sym)
+                vol = safe_float(c.get("total_volume"))
+                mcap = safe_float(c.get("market_cap"))
+                vr = (vol / mcap * 100) if mcap else 0.0
+                why = "🔥 В тренде CoinGecko — повышенное внимание рынка"
+                if vr > 40:
+                    why += f"; всплеск объёма Vol/MCap {vr:.0f}%"
+                picks.append({"raw": c, "why": why, "sym": sym, "volr": vr})
+
+            for c in gainers or []:
+                sym = str(c.get("symbol", "")).upper()
+                if sym in seen_syms:
+                    continue
+                seen_syms.add(sym)
+                ch = safe_float(c.get("price_change_percentage_24h"))
+                vol = safe_float(c.get("total_volume"))
+                mcap = safe_float(c.get("market_cap"))
+                vr = (vol / mcap * 100) if mcap else 0.0
+                why = f"📈 Сильный рост 24ч ({ch:+.1f}%) среди лидеров по %"
+                if vr > 35:
+                    why += f"; всплеск объёма Vol/MCap {vr:.0f}%"
+                picks.append({"raw": c, "why": why, "sym": sym, "volr": vr})
+
+            for c in obscure or []:
+                sym = str(c.get("symbol", "")).upper()
+                if sym in seen_syms:
+                    continue
+                seen_syms.add(sym)
+                rank = c.get("market_cap_rank")
+                why = "🆕 Менее известные активы (страница листинга CoinGecko)"
+                if rank:
+                    why += f"; ранг капы #{rank}"
+                picks.append({"raw": c, "why": why, "sym": sym, "volr": 0.0})
+
+            if not picks:
+                return "❌ Не удалось собрать данные. Попробуй через минуту."
+
+            random.shuffle(picks)
+            picks.sort(key=lambda x: x["volr"], reverse=True)
+            selected = picks[:10]
+
+            lines = ["🆕 *Новые и интересные монеты*\n", "_Источники: тренды + топ гейнеров + «дальняя» страница рынка_\n"]
+            for row in selected:
+                c = row["raw"]
+                sym = row["sym"]
+                norm = self._normalize_market_coin(c)
+                price = norm["price"]
+                ch24 = norm["change_24h"]
+                sig, sc = self._coin_signal(norm, fg["value"])
+                quick = "🟢 Покупка" if sig == "buy" else "🟡 Осторожно" if sig == "wait" else "🔴 Риск"
+                stop = price * 0.92 if price > 0 else 0.0
+                lines.append(
+                    f"*{sym}* ({c.get('name', '')})\n"
+                    f"• Почему: {row['why']}\n"
+                    f"• Быстрый сигнал: {quick} (score рынка `{sc}`)\n"
+                    f"• Цена: {fmt_price(price)} | 24ч: {ch24:+.1f}%\n"
+                    f"• Вход ориентир: {fmt_price(price)} | Стоп: {fmt_price(stop)} (-8%)\n"
+                )
+            lines.append("⚠️ Высокий риск. DYOR. `/analyze SYMBOL` — детальный разбор.")
+            return "\n".join(lines)
+        except Exception:
+            return "❌ Ошибка при поиске новых монет. Попробуй позже."
 
     async def find_dump_risk(self) -> str:
         coins, fg = await asyncio.gather(self._get_market_snapshot(220), self._get_fear_greed())
