@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-print("bot placeholder")
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -294,7 +291,7 @@ async def run_bot_forever() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run_bot_forever())
-from __future__ import annotations
+
 
 import asyncio
 import json
@@ -603,7 +600,7 @@ async def run_bot_forever() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run_bot_forever())
-from __future__ import annotations
+
 
 import asyncio
 import json
