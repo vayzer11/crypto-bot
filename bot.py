@@ -1,5 +1,610 @@
 from __future__ import annotations
 
+print("bot placeholder")
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from dotenv import load_dotenv
+
+from alerts import AlertManager
+from analysis import CryptoAnalyzer
+from contract_checker import ContractSecurityChecker
+from scanner import MultiChainScanner
+from sniper import get_sniper_status_text, scanner_loop as sniper_loop
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+SUPPORTED_CHAINS = {"ethereum", "bsc", "solana", "base", "arbitrum", "polygon"}
+
+dp = Dispatcher()
+scanner = MultiChainScanner()
+checker = ContractSecurityChecker()
+alerts = AlertManager()
+analyzer = CryptoAnalyzer()
+
+
+def ensure_users_file() -> None:
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text("[]", encoding="utf-8")
+
+
+def load_users() -> set[int]:
+    ensure_users_file()
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        return {int(x) for x in data if str(x).isdigit()}
+    except Exception:
+        return set()
+
+
+def save_user(user_id: int) -> None:
+    users = load_users()
+    users.add(user_id)
+    USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
+
+
+def _fmt_money(v: float) -> str:
+    if v >= 1_000_000_000:
+        return f"${v / 1_000_000_000:.2f}B"
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.2f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.1f}K"
+    return f"${v:,.0f}"
+
+
+def main_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🆕 /new", callback_data="run:new"), InlineKeyboardButton(text="🌍 /scan", callback_data="run:scan")],
+            [InlineKeyboardButton(text="🐸 /meme", callback_data="run:meme"), InlineKeyboardButton(text="🏦 /defi", callback_data="run:defi")],
+            [InlineKeyboardButton(text="🔥 /hot", callback_data="run:hot"), InlineKeyboardButton(text="✅ /safe", callback_data="run:safe")],
+            [InlineKeyboardButton(text="🎯 /snipe", callback_data="run:snipe"), InlineKeyboardButton(text="🛡 /check", callback_data="help:check")],
+        ]
+    )
+
+
+def token_actions(contract: str, chain: str, symbol: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh:{chain}:{contract}"), InlineKeyboardButton(text="🔍 Check Contract", callback_data=f"check:{chain}:{contract}")],
+            [InlineKeyboardButton(text="📊 Analyze", callback_data=f"analyze:{symbol}")],
+        ]
+    )
+
+
+def token_card(row: dict[str, Any]) -> str:
+    listed = f"{row['age_hours']:.1f} hours ago" if row["age_hours"] >= 1 else f"{int(row['age_hours'] * 60)} min ago"
+    tax = f"{row['buy_tax']}% / {row['sell_tax']}%" if row.get("buy_tax") is not None and row.get("sell_tax") is not None else "N/A"
+    signal = "WATCH" if row.get("risk_score", 0) <= 30 else "CAUTION"
+    return (
+        "🆕 NEW TOKEN FOUND\n"
+        f"📛 Name: {row['name']} ({row['symbol']})\n"
+        f"🌐 Chain: {row['chain'].capitalize()}\n"
+        f"⏰ Listed: {listed}\n"
+        f"💧 Liquidity: {_fmt_money(float(row['liquidity']))}\n"
+        f"💰 Market Cap: {_fmt_money(float(row['market_cap']))}\n"
+        f"📊 Volume 24h: {_fmt_money(float(row['volume_24h']))}\n"
+        f"🟢 Buy/Sell Tax: {tax}\n"
+        f"✅ Honeypot: {'No' if not row.get('is_honeypot') else 'Yes'}\n"
+        f"📈 Signal: {signal}\n"
+        f"Contract: `{row['contract']}`"
+    )
+
+
+async def _scan_mode(mode: str) -> list[dict[str, Any]]:
+    rows = await scanner.scan_new_tokens(max_age_hours=24)
+    if mode == "new":
+        rows = [x for x in rows if x["age_hours"] <= 6]
+    elif mode == "meme":
+        rows = [x for x in rows if x.get("category") == "meme"]
+    elif mode == "defi":
+        rows = [x for x in rows if x.get("category") == "defi"]
+    elif mode == "hot":
+        rows.sort(key=lambda x: x.get("volume_1h", 0), reverse=True)
+    elif mode == "safe":
+        rows = [x for x in rows if not x.get("is_honeypot")]
+    return rows[:12]
+
+
+async def _send_scan_response(message: Message, mode: str) -> None:
+    waiting = await message.answer("🔍 Scanning live DexScreener data...")
+    try:
+        rows = await _scan_mode(mode)
+    except Exception as exc:
+        logger.exception("scan command failed: %s", exc)
+        await waiting.edit_text(f"❌ Scan failed: {str(exc)[:160]}")
+        return
+    if not rows:
+        await waiting.edit_text("No tokens found.")
+        return
+    first = rows[0]
+    await waiting.edit_text(token_card(first), parse_mode="Markdown", reply_markup=token_actions(first["contract"], first["chain"], first["symbol"]))
+    for row in rows[1:4]:
+        await message.answer(token_card(row), parse_mode="Markdown", reply_markup=token_actions(row["contract"], row["chain"], row["symbol"]))
+
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    save_user(message.from_user.id)
+    await message.answer("🚀 Crypto Bot online\nCommands: /new /scan /meme /defi /hot /safe /check /snipe", reply_markup=main_menu())
+
+
+@dp.callback_query(F.data.startswith("run:"))
+async def cb_run(query: CallbackQuery) -> None:
+    save_user(query.from_user.id)
+    mode = query.data.split(":", 1)[1]
+    await query.answer()
+    if mode == "snipe":
+        await query.message.answer(get_sniper_status_text(), parse_mode="Markdown")
+        return
+    await _send_scan_response(query.message, mode)
+
+
+@dp.callback_query(F.data.startswith("refresh:"))
+async def cb_refresh(query: CallbackQuery) -> None:
+    await query.answer("Refreshing...")
+    _, chain, contract = query.data.split(":", 2)
+    rows = await scanner.scan_new_tokens(max_age_hours=24)
+    for row in rows:
+        if row["chain"] == chain and row["contract"].lower() == contract.lower():
+            await query.message.edit_text(token_card(row), parse_mode="Markdown", reply_markup=token_actions(row["contract"], row["chain"], row["symbol"]))
+            return
+    await query.message.answer("Token not found in latest scan.")
+
+
+@dp.callback_query(F.data.startswith("check:"))
+async def cb_check(query: CallbackQuery) -> None:
+    await query.answer("Checking contract...")
+    _, chain, contract = query.data.split(":", 2)
+    await query.message.answer(await checker.check_and_format_report(contract, chain), parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("analyze:"))
+async def cb_analyze(query: CallbackQuery) -> None:
+    await query.answer("Analyzing...")
+    symbol = query.data.split(":", 1)[1]
+    snap = await analyzer.indicator_snapshot(symbol)
+    await query.message.answer(f"📊 Analysis {snap['symbol']}\nRSI: {snap['rsi']}\nMACD: {snap['macd']}\nSignal: {snap['macd_signal']}\nBB: {snap['bb_low']} / {snap['bb_mid']} / {snap['bb_high']}")
+
+
+@dp.callback_query(F.data == "help:check")
+async def cb_help_check(query: CallbackQuery) -> None:
+    await query.answer()
+    await query.message.answer("Usage: /check <chain> <contract>\nExample: /check ethereum 0x...")
+
+
+@dp.message(Command("scan"))
+async def cmd_scan(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "scan")
+
+
+@dp.message(Command("new"))
+async def cmd_new(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "new")
+
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "meme")
+
+
+@dp.message(Command("defi"))
+async def cmd_defi(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "defi")
+
+
+@dp.message(Command("hot"))
+async def cmd_hot(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "hot")
+
+
+@dp.message(Command("safe"))
+async def cmd_safe(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "safe")
+
+
+@dp.message(Command("snipe"))
+async def cmd_snipe(message: Message) -> None:
+    save_user(message.from_user.id)
+    await message.answer(get_sniper_status_text(), parse_mode="Markdown")
+
+
+@dp.message(Command("check"))
+async def cmd_check(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Usage: /check <chain> <contract>")
+        return
+    chain, contract = parts[1].lower(), parts[2].strip()
+    if chain not in SUPPORTED_CHAINS:
+        await message.answer("Supported chains: ethereum, bsc, solana, base, arbitrum, polygon")
+        return
+    await message.answer(await checker.check_and_format_report(contract, chain), parse_mode="Markdown")
+
+
+@dp.message(Command("alertprice"))
+async def cmd_alertprice(message: Message) -> None:
+    parts = message.text.split()
+    if len(parts) < 4:
+        await message.answer("Usage: /alertprice PEPE above 0.000001")
+        return
+    alerts.add_price_alert(message.from_user.id, parts[1], float(parts[3]), parts[2].lower())
+    await message.answer("✅ Price alert added")
+
+
+@dp.message(Command("alerts"))
+async def cmd_alerts(message: Message) -> None:
+    data = alerts.get_user_alerts(message.from_user.id)
+    if not data:
+        await message.answer("No alerts.")
+        return
+    await message.answer("\n".join(["🔔 Alerts:"] + [f"{i}. {a['type']} {a['symbol']} {a['condition']} {a['value']}" for i, a in enumerate(data, 1)]))
+
+
+async def alerts_loop(bot: Bot) -> None:
+    while True:
+        try:
+            rows = await scanner.scan_new_tokens(max_age_hours=24)
+            for user_id, txt in alerts.evaluate(rows):
+                await bot.send_message(user_id, txt)
+        except Exception as exc:
+            logger.exception("alerts loop error: %s", exc)
+        await asyncio.sleep(20)
+
+
+async def run_bot_forever() -> None:
+    ensure_users_file()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN missing")
+    await scanner.start()
+    bot = Bot(BOT_TOKEN)
+    asyncio.create_task(alerts_loop(bot))
+    asyncio.create_task(sniper_loop(bot))
+    retry = 3
+    while True:
+        try:
+            logger.info("start polling")
+            await dp.start_polling(bot)
+        except Exception as exc:
+            logger.exception("polling crash: %s", exc)
+            await asyncio.sleep(retry)
+            retry = min(60, retry * 2)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_bot_forever())
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
+from dotenv import load_dotenv
+
+from alerts import AlertManager
+from analysis import CryptoAnalyzer
+from contract_checker import ContractSecurityChecker
+from scanner import MultiChainScanner
+from sniper import scanner_loop as sniper_loop, get_sniper_status_text
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+SUPPORTED_CHAINS = {"ethereum", "bsc", "solana", "base", "arbitrum", "polygon"}
+
+dp = Dispatcher()
+scanner = MultiChainScanner()
+checker = ContractSecurityChecker()
+alerts = AlertManager()
+analyzer = CryptoAnalyzer()
+
+
+def ensure_users_file() -> None:
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text("[]", encoding="utf-8")
+
+
+def load_users() -> set[int]:
+    ensure_users_file()
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        return {int(x) for x in data if str(x).isdigit()}
+    except Exception:
+        return set()
+
+
+def save_user(user_id: int) -> None:
+    users = load_users()
+    users.add(user_id)
+    USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
+
+
+def _fmt_money(v: float) -> str:
+    if v >= 1_000_000_000:
+        return f"${v / 1_000_000_000:.2f}B"
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.2f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.1f}K"
+    return f"${v:,.0f}"
+
+
+def main_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🆕 /new", callback_data="run:new"), InlineKeyboardButton(text="🌍 /scan", callback_data="run:scan")],
+            [InlineKeyboardButton(text="🐸 /meme", callback_data="run:meme"), InlineKeyboardButton(text="🏦 /defi", callback_data="run:defi")],
+            [InlineKeyboardButton(text="🔥 /hot", callback_data="run:hot"), InlineKeyboardButton(text="✅ /safe", callback_data="run:safe")],
+            [InlineKeyboardButton(text="🎯 /snipe", callback_data="run:snipe"), InlineKeyboardButton(text="🛡 /check", callback_data="help:check")],
+        ]
+    )
+
+
+def token_actions(contract: str, chain: str, symbol: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh:{chain}:{contract}"), InlineKeyboardButton(text="🔍 Check Contract", callback_data=f"check:{chain}:{contract}")],
+            [InlineKeyboardButton(text="📊 Analyze", callback_data=f"analyze:{symbol}")],
+        ]
+    )
+
+
+def token_card(row: dict[str, Any]) -> str:
+    listed = f"{row['age_hours']:.1f} hours ago" if row["age_hours"] >= 1 else f"{int(row['age_hours'] * 60)} min ago"
+    tax = (
+        f"{row['buy_tax']}% / {row['sell_tax']}%"
+        if row.get("buy_tax") is not None and row.get("sell_tax") is not None
+        else "N/A"
+    )
+    signal = "WATCH" if row.get("risk_score", 0) <= 30 else "CAUTION"
+    return (
+        "🆕 NEW TOKEN FOUND\n"
+        f"📛 Name: {row['name']} ({row['symbol']})\n"
+        f"🌐 Chain: {row['chain'].capitalize()}\n"
+        f"⏰ Listed: {listed}\n"
+        f"💧 Liquidity: {_fmt_money(float(row['liquidity']))}\n"
+        f"💰 Market Cap: {_fmt_money(float(row['market_cap']))}\n"
+        f"📊 Volume 24h: {_fmt_money(float(row['volume_24h']))}\n"
+        f"🟢 Buy/Sell Tax: {tax}\n"
+        f"✅ Honeypot: {'No' if not row.get('is_honeypot') else 'Yes'}\n"
+        f"📈 Signal: {signal}\n"
+        f"Contract: `{row['contract']}`"
+    )
+
+
+async def _scan_mode(mode: str) -> list[dict[str, Any]]:
+    rows = await scanner.scan_new_tokens(max_age_hours=24)
+    if mode == "new":
+        rows = [x for x in rows if x["age_hours"] <= 6]
+    elif mode == "meme":
+        rows = [x for x in rows if x.get("category") == "meme"]
+    elif mode == "defi":
+        rows = [x for x in rows if x.get("category") == "defi"]
+    elif mode == "hot":
+        rows.sort(key=lambda x: x.get("volume_1h", 0), reverse=True)
+    elif mode == "safe":
+        rows = [x for x in rows if not x.get("is_honeypot")]
+    return rows[:12]
+
+
+async def _send_scan_response(message: Message, mode: str) -> None:
+    waiting = await message.answer("🔍 Scanning live DexScreener data...")
+    try:
+        rows = await _scan_mode(mode)
+    except Exception as exc:
+        logger.exception("scan command failed: %s", exc)
+        await waiting.edit_text(f"❌ Scan failed: {str(exc)[:160]}")
+        return
+    if not rows:
+        await waiting.edit_text("No tokens found.")
+        return
+    first = rows[0]
+    await waiting.edit_text(token_card(first), parse_mode="Markdown", reply_markup=token_actions(first["contract"], first["chain"], first["symbol"]))
+    for row in rows[1:4]:
+        await message.answer(token_card(row), parse_mode="Markdown", reply_markup=token_actions(row["contract"], row["chain"], row["symbol"]))
+
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    save_user(message.from_user.id)
+    await message.answer(
+        "🚀 Crypto Bot online\nUse commands: /new /scan /meme /defi /hot /safe /check /snipe",
+        reply_markup=main_menu(),
+    )
+
+
+@dp.callback_query(F.data.startswith("run:"))
+async def cb_run(query: CallbackQuery) -> None:
+    save_user(query.from_user.id)
+    mode = query.data.split(":", 1)[1]
+    await query.answer()
+    if mode == "snipe":
+        await query.message.answer(get_sniper_status_text(), parse_mode="Markdown")
+        return
+    await _send_scan_response(query.message, mode)
+
+
+@dp.callback_query(F.data.startswith("refresh:"))
+async def cb_refresh(query: CallbackQuery) -> None:
+    await query.answer("Refreshing...")
+    _, chain, contract = query.data.split(":", 2)
+    rows = await scanner.scan_new_tokens(max_age_hours=24)
+    for row in rows:
+        if row["chain"] == chain and row["contract"].lower() == contract.lower():
+            await query.message.edit_text(token_card(row), parse_mode="Markdown", reply_markup=token_actions(row["contract"], row["chain"], row["symbol"]))
+            return
+    await query.message.answer("Token not found in latest scan.")
+
+
+@dp.callback_query(F.data.startswith("check:"))
+async def cb_check(query: CallbackQuery) -> None:
+    await query.answer("Checking contract...")
+    _, chain, contract = query.data.split(":", 2)
+    report = await checker.check_and_format_report(contract, chain)
+    await query.message.answer(report, parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("analyze:"))
+async def cb_analyze(query: CallbackQuery) -> None:
+    await query.answer("Analyzing...")
+    symbol = query.data.split(":", 1)[1]
+    snap = await analyzer.indicator_snapshot(symbol)
+    await query.message.answer(
+        f"📊 Analysis {snap['symbol']}\nRSI: {snap['rsi']}\nMACD: {snap['macd']}\nSignal: {snap['macd_signal']}\nBB: {snap['bb_low']} / {snap['bb_mid']} / {snap['bb_high']}",
+    )
+
+
+@dp.callback_query(F.data == "help:check")
+async def cb_help_check(query: CallbackQuery) -> None:
+    await query.answer()
+    await query.message.answer("Usage: /check <chain> <contract>\nExample: /check ethereum 0x...")
+
+
+@dp.message(Command("scan"))
+async def cmd_scan(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "scan")
+
+
+@dp.message(Command("new"))
+async def cmd_new(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "new")
+
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "meme")
+
+
+@dp.message(Command("defi"))
+async def cmd_defi(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "defi")
+
+
+@dp.message(Command("hot"))
+async def cmd_hot(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "hot")
+
+
+@dp.message(Command("safe"))
+async def cmd_safe(message: Message) -> None:
+    save_user(message.from_user.id)
+    await _send_scan_response(message, "safe")
+
+
+@dp.message(Command("snipe"))
+async def cmd_snipe(message: Message) -> None:
+    save_user(message.from_user.id)
+    await message.answer(get_sniper_status_text(), parse_mode="Markdown")
+
+
+@dp.message(Command("check"))
+async def cmd_check(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Usage: /check <chain> <contract>")
+        return
+    chain = parts[1].lower()
+    contract = parts[2].strip()
+    if chain not in SUPPORTED_CHAINS:
+        await message.answer("Supported chains: ethereum, bsc, solana, base, arbitrum, polygon")
+        return
+    report = await checker.check_and_format_report(contract, chain)
+    await message.answer(report, parse_mode="Markdown")
+
+
+@dp.message(Command("alertprice"))
+async def cmd_alertprice(message: Message) -> None:
+    parts = message.text.split()
+    if len(parts) < 4:
+        await message.answer("Usage: /alertprice PEPE above 0.000001")
+        return
+    alerts.add_price_alert(message.from_user.id, parts[1], float(parts[3]), parts[2].lower())
+    await message.answer("✅ Price alert added")
+
+
+@dp.message(Command("alerts"))
+async def cmd_alerts(message: Message) -> None:
+    data = alerts.get_user_alerts(message.from_user.id)
+    if not data:
+        await message.answer("No alerts.")
+        return
+    lines = ["🔔 Alerts:"]
+    for i, a in enumerate(data, 1):
+        lines.append(f"{i}. {a['type']} {a['symbol']} {a['condition']} {a['value']}")
+    await message.answer("\n".join(lines))
+
+
+async def alerts_loop(bot: Bot) -> None:
+    while True:
+        try:
+            rows = await scanner.scan_new_tokens(max_age_hours=24)
+            for user_id, txt in alerts.evaluate(rows):
+                await bot.send_message(user_id, txt)
+        except Exception as exc:
+            logger.exception("alerts loop error: %s", exc)
+        await asyncio.sleep(20)
+
+
+async def run_bot_forever() -> None:
+    ensure_users_file()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN missing")
+    await scanner.start()
+    bot = Bot(BOT_TOKEN)
+    asyncio.create_task(alerts_loop(bot))
+    asyncio.create_task(sniper_loop(bot))
+
+    retry = 3
+    while True:
+        try:
+            logger.info("start polling")
+            await dp.start_polling(bot)
+        except Exception as exc:
+            logger.exception("polling crash: %s", exc)
+            await asyncio.sleep(retry)
+            retry = min(60, retry * 2)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_bot_forever())
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -23,6 +628,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 dp = Dispatcher()
 scanner = MultiChainScanner()

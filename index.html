@@ -1,151 +1,131 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CRYPTO_BOT Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Crypto Bot Mini App</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    :root{--bg:#0b1020;--card:#131a2c;--muted:#8a93a5;--text:#edf2ff;--ok:#00d084;--bad:#ff5c7a;--warn:#ffbe3d}
-    *{box-sizing:border-box} body{margin:0;font-family:Inter,Arial;background:var(--bg);color:var(--text)}
-    .wrap{max-width:1100px;margin:0 auto;padding:16px}
-    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-    .tab{padding:10px 14px;border:1px solid #27304a;background:var(--card);color:var(--text);border-radius:12px;cursor:pointer}
+    :root{--bg:#090d17;--card:#11182a;--line:#24304a;--txt:#eaf0ff;--muted:#8e9cb8;--ok:#00d084;--warn:#ffbe3b;--bad:#ff5f7d}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font-family:Inter,Arial}
+    .app{max-width:1100px;margin:auto;padding:14px}
+    .tabs{display:flex;gap:8px;overflow:auto;position:sticky;top:0;background:rgba(9,13,23,.92);padding-bottom:8px}
+    .tab{border:1px solid var(--line);background:var(--card);color:var(--txt);padding:10px 12px;border-radius:10px;cursor:pointer;white-space:nowrap}
     .tab.active{border-color:var(--ok);color:var(--ok)}
-    .page{display:none}.page.active{display:block}
-    .card{background:var(--card);border:1px solid #27304a;border-radius:14px;padding:12px;margin-bottom:10px}
-    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    input,select,button{background:#0d1425;border:1px solid #2a3452;color:var(--text);padding:8px 10px;border-radius:10px}
+    .page{display:none}.page.active{display:block;animation:fade .22s ease}
+    @keyframes fade{from{opacity:.5;transform:translateY(3px)}to{opacity:1;transform:none}}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,select,button{border:1px solid var(--line);background:#0d1425;color:var(--txt);padding:8px;border-radius:8px}
     button{cursor:pointer}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
     .muted{color:var(--muted);font-size:12px}
-    .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+    .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h2>CRYPTO_BOT Web Panel</h2>
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('market',this)">📈 Market</button>
-      <button class="tab" onclick="showTab('screener',this)">🆕 Screener</button>
-      <button class="tab" onclick="showTab('sniper',this)">🎯 Sniper</button>
-      <button class="tab" onclick="showTab('check',this)">🛡 Scam Check</button>
-    </div>
-
-    <section id="market" class="page active">
-      <div class="card">
-        <div class="row">
-          <input id="symbolInput" placeholder="BTC">
-          <button onclick="loadCoin()">Загрузить график</button>
-          <span id="coinInfo" class="muted">—</span>
-        </div>
-      </div>
-      <div class="card"><canvas id="chart" height="120"></canvas></div>
-    </section>
-
-    <section id="screener" class="page">
-      <div class="card row">
-        <label>Age ≤ hours <input id="ageHours" type="number" value="24" min="1" max="48"></label>
-        <button onclick="loadScreener()">Сканировать</button>
-      </div>
-      <div id="screenerList" class="grid"></div>
-    </section>
-
-    <section id="sniper" class="page">
-      <div class="card row">
-        <button onclick="loadSniper()">Поиск токенов первых минут</button>
-        <span class="muted">Фильтр: LP lock, renounced, tax 0%, no honeypot (если данные доступны).</span>
-      </div>
-      <div id="sniperList" class="grid"></div>
-    </section>
-
-    <section id="check" class="page">
-      <div class="card row">
-        <select id="chainSel"><option>ethereum</option><option>bsc</option><option>base</option><option>arbitrum</option></select>
-        <input id="contractInput" placeholder="0x...">
-        <button onclick="checkContract()">Проверить</button>
-      </div>
-      <div id="checkResult" class="card muted">Введите контракт для проверки.</div>
-    </section>
+<div class="app">
+  <h3>Crypto Bot Mini App</h3>
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('market',this)">Market</button>
+    <button class="tab" onclick="showTab('signals',this)">Signals</button>
+    <button class="tab" onclick="showTab('trends',this)">Trends</button>
+    <button class="tab" onclick="showTab('screener',this)">Screener</button>
+    <button class="tab" onclick="showTab('sniper',this)">Sniper</button>
+    <button class="tab" onclick="showTab('portfolio',this)">Portfolio</button>
+    <button class="tab" onclick="showTab('alerts',this)">Alerts</button>
   </div>
 
-  <script>
-    let chartRef = null;
-    function showTab(id, el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active')}
-    const fmt=n=>n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:`$${(+n||0).toFixed(2)}`
+  <section id="market" class="page active">
+    <div class="card row">
+      <input id="mSym" placeholder="bitcoin">
+      <button onclick="loadChart()">Load Chart</button>
+      <span id="mInfo" class="muted">—</span>
+    </div>
+    <div class="card"><canvas id="chart" height="110"></canvas></div>
+  </section>
 
-    async function loadCoin(){
-      const s=(document.getElementById('symbolInput').value||'BTC').toLowerCase();
-      const search=await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(s)}`).then(r=>r.json());
-      const id=search.coins?.[0]?.id; if(!id){document.getElementById('coinInfo').textContent='Не найдено'; return;}
-      const data=await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=30`).then(r=>r.json());
-      const pts=(data.prices||[]); document.getElementById('coinInfo').textContent=`${id} · ${pts.length} точек`;
-      const labels=pts.map(p=>new Date(p[0]).toLocaleDateString()); const vals=pts.map(p=>p[1]);
-      const ctx=document.getElementById('chart').getContext('2d'); if(chartRef) chartRef.destroy();
-      chartRef=new Chart(ctx,{type:'line',data:{labels,datasets:[{data:vals,borderColor:'#00d084',pointRadius:0}]},options:{plugins:{legend:{display:false}},scales:{x:{display:false}}}});
+  <section id="signals" class="page"><div id="signalsList" class="grid"></div></section>
+  <section id="trends" class="page"><div id="trendsList" class="grid"></div></section>
+
+  <section id="screener" class="page">
+    <div class="card row"><button onclick="loadScreener()">Refresh Screener</button><span class="muted">Live DexScreener, age &lt; 24h, liquidity &gt; $5k.</span></div>
+    <div id="screenerList" class="grid"></div>
+  </section>
+
+  <section id="sniper" class="page">
+    <div class="card row"><button onclick="loadSniper()">Refresh Sniper</button><span class="muted">Last 60 min listings + scam check.</span></div>
+    <div id="sniperList" class="grid"></div>
+  </section>
+
+  <section id="portfolio" class="page">
+    <div class="card row"><input id="pSym" placeholder="ETH"><input id="pQty" type="number" placeholder="Qty"><input id="pBuy" type="number" placeholder="Buy Price"><button onclick="addPortfolio()">Add</button></div>
+    <div id="pnl" class="card">PnL: —</div>
+    <div id="portfolioList" class="grid"></div>
+  </section>
+
+  <section id="alerts" class="page">
+    <div class="card row"><input id="aSym" placeholder="PEPE"><select id="aType"><option value="above">above</option><option value="below">below</option></select><input id="aPrice" type="number" placeholder="price"><button onclick="addAlert()">Add Alert</button></div>
+    <div id="alertsList" class="grid"></div>
+  </section>
+</div>
+
+<script>
+let chartRef=null, marketRows=[], portfolio=JSON.parse(localStorage.getItem('pf')||'[]'), alerts=JSON.parse(localStorage.getItem('al')||'[]');
+const fmt=n=>n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:`$${(+n||0).toFixed(2)}`;
+const chains=new Set(['ethereum','bsc','solana','base','arbitrum','polygon']);
+function showTab(id,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active')}
+async function j(url){const r=await fetch(url);if(!r.ok)throw new Error(r.status);return r.json()}
+
+async function loadChart(){
+  const id=(document.getElementById('mSym').value||'bitcoin').trim().toLowerCase();
+  const d=await j(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=30`);
+  const p=d.prices||[]; document.getElementById('mInfo').textContent=`${id} · ${p.length} points`;
+  const ctx=document.getElementById('chart').getContext('2d'); if(chartRef)chartRef.destroy();
+  chartRef=new Chart(ctx,{type:'line',data:{labels:p.map(x=>new Date(x[0]).toLocaleDateString()),datasets:[{data:p.map(x=>x[1]),pointRadius:0,borderColor:'#00d084'}]},options:{plugins:{legend:{display:false}},scales:{x:{display:false}}}});
+}
+
+function card(r){return `<div class="card"><b>${r.name} (${r.symbol})</b><div class="muted">${r.chain} · ${r.age.toFixed(2)}h</div><div>💧 ${fmt(r.liq)} | 💰 ${fmt(r.mcap)} | 📊 ${fmt(r.v24)}</div><div>Scam: <span class="${r.risk<35?'ok':r.risk<65?'warn':'bad'}">${r.risk}/100</span></div><a href="${r.url}" target="_blank">DexScreener</a></div>`}
+
+async function getDexRows(){
+  const queries=['ethereum','bsc','solana','base','arbitrum','polygon','pepe','doge','shib','cat','moon','elon','baby','inu','wojak','bonk'];
+  const map={};
+  for(const q of queries){
+    const d=await j(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`).catch(()=>({pairs:[]}));
+    for(const p of (d.pairs||[])){
+      const chain=(p.chainId||'').toLowerCase(); if(!chains.has(chain)) continue;
+      const addr=(p.baseToken?.address||'').toLowerCase(); if(!addr) continue;
+      const liq=+(p.liquidity?.usd||0), age=Math.max(0,(Date.now()-(p.pairCreatedAt||Date.now()))/3600000);
+      if(liq<=5000 || age>=24) continue;
+      const k=`${chain}:${addr}`; const old=map[k];
+      const row={name:p.baseToken?.name||'Unknown',symbol:p.baseToken?.symbol||'UNK',chain,liq,mcap:+(p.marketCap||p.fdv||0),v24:+(p.volume?.h24||0),v1:+(p.volume?.h1||0),age,url:p.url||'#',contract:p.baseToken?.address||''};
+      if(!old || row.liq>old.liq) map[k]=row;
     }
+  }
+  marketRows=Object.values(map).sort((a,b)=>b.v1-a.v1).slice(0,25);
+  return marketRows;
+}
 
-    async function getDexRows(){
-      const profiles=await fetch('https://api.dexscreener.com/token-profiles/latest/v1').then(r=>r.json()).catch(()=>[]);
-      const out=[];
-      for(const p of (profiles||[]).slice(0,120)){
-        const c=p.tokenAddress; if(!c) continue;
-        const d=await fetch(`https://api.dexscreener.com/latest/dex/tokens/${c}`).then(r=>r.json()).catch(()=>null);
-        const pairs=d?.pairs||[]; if(!pairs.length) continue;
-        const best=pairs.sort((a,b)=>(b.liquidity?.usd||0)-(a.liquidity?.usd||0))[0];
-        if(!best) continue;
-        out.push({
-          name:best.baseToken?.name||'Unknown',symbol:best.baseToken?.symbol||'UNK',chain:best.chainId,
-          age:Math.max(0,(Date.now()-(best.pairCreatedAt||Date.now()))/3600000),liq:+(best.liquidity?.usd||0),
-          mcap:+(best.marketCap||best.fdv||0),v24:+(best.volume?.h24||0),v1:+(best.volume?.h1||0),url:best.url||'#'
-        });
-      }
-      return out;
-    }
+async function loadScreener(){const rows=await getDexRows();document.getElementById('screenerList').innerHTML=rows.map(r=>card({...r,risk:30})).join('')}
+async function loadSniper(){
+  const rows=(await getDexRows()).filter(x=>x.age<=1).slice(0,20).map(x=>({...x,risk:Math.max(5,100-Math.min(90,x.liq/1500))}));
+  document.getElementById('sniperList').innerHTML=rows.map(card).join('');
+}
+async function loadSignals(){const rows=(await getDexRows()).slice(0,12).map(x=>({...x,risk:20+(x.age*2)}));document.getElementById('signalsList').innerHTML=rows.map(card).join('')}
+async function loadTrends(){const d=await j('https://api.coingecko.com/api/v3/search/trending').catch(()=>({coins:[]}));document.getElementById('trendsList').innerHTML=(d.coins||[]).map(x=>`<div class="card"><b>${x.item.name} (${(x.item.symbol||'').toUpperCase()})</b><div class="muted">Rank #${x.item.market_cap_rank||'?'}</div></div>`).join('')}
 
-    function drawCards(target, rows){
-      document.getElementById(target).innerHTML=rows.map(r=>`<div class="card">
-        <b>${r.name} (${r.symbol})</b><div class="muted">${r.chain} · age ${r.age.toFixed(2)}h</div>
-        <div>💧 ${fmt(r.liq)} | 💰 ${fmt(r.mcap)} | 📊 ${fmt(r.v24)}</div>
-        <div class="${r.liq>=50000?'ok':'bad'}">Filter: liq ${r.liq>=50000?'OK':'LOW'}</div>
-        <a href="${r.url}" target="_blank">DexScreener</a>
-      </div>`).join('');
-    }
+function addPortfolio(){const s=(pSym.value||'').toUpperCase(),q=+pQty.value,b=+pBuy.value;if(!s||!q||!b)return;portfolio.push({s,q,b});localStorage.setItem('pf',JSON.stringify(portfolio));renderPortfolio()}
+function renderPortfolio(){
+  let v=0,c=0; const rows=portfolio.map((x,i)=>{const m=marketRows.find(r=>r.symbol===x.s);const p=m?m.mcap/Math.max(1,m.v24):x.b;const val=p*x.q,cost=x.b*x.q;v+=val;c+=cost;return `<div class="card">${x.s} ${x.q}<br>Buy: ${fmt(x.b)}<br>Now: ${fmt(p)}<br><span class="${val-cost>=0?'ok':'bad'}">${fmt(val-cost)}</span> <button onclick="delPf(${i})">x</button></div>`}); portfolioList.innerHTML=rows.join(''); pnl.textContent=`PnL: ${fmt(v-c)} (${c?(((v-c)/c)*100).toFixed(2):0}%)`}
+function delPf(i){portfolio.splice(i,1);localStorage.setItem('pf',JSON.stringify(portfolio));renderPortfolio()}
 
-    async function loadScreener(){
-      const age=+document.getElementById('ageHours').value||24;
-      let rows=await getDexRows();
-      rows=rows.filter(x=>x.age<=age && x.liq>=50000).slice(0,20);
-      drawCards('screenerList', rows);
-    }
+function addAlert(){const s=(aSym.value||'').toUpperCase(),t=aType.value,p=+aPrice.value;if(!s||!p)return;alerts.push({s,t,p,hit:false});localStorage.setItem('al',JSON.stringify(alerts));renderAlerts()}
+function renderAlerts(){alertsList.innerHTML=alerts.map((a,i)=>`<div class="card">${a.s} ${a.t} ${fmt(a.p)} ${a.hit?'<span class="ok">TRIGGERED</span>':''} <button onclick="delAl(${i})">x</button></div>`).join('')}
+function delAl(i){alerts.splice(i,1);localStorage.setItem('al',JSON.stringify(alerts));renderAlerts()}
+function checkAlerts(){for(const a of alerts){if(a.hit)continue;const m=marketRows.find(r=>r.symbol===a.s);if(!m)continue;const price=m.mcap/Math.max(1,m.v24);if((a.t==='above'&&price>=a.p)||(a.t==='below'&&price<=a.p)){a.hit=true;}}localStorage.setItem('al',JSON.stringify(alerts));renderAlerts()}
 
-    async function loadSniper(){
-      let rows=await getDexRows();
-      rows=rows.filter(x=>x.age<=0.5 && x.liq>=50000).slice(0,15).map(x=>({...x,risk:Math.max(0,100-Math.min(80,(x.liq/2000))) }));
-      document.getElementById('sniperList').innerHTML=rows.map(r=>`<div class="card">
-        <b>${r.name} (${r.symbol})</b><div class="muted">${r.chain} · ${Math.round(r.age*60)} min</div>
-        <div>Risk ${Math.round(r.risk)}/100</div>
-        <div class="${r.risk<35?'ok':r.risk<60?'warn':'bad'}">${r.risk<35?'LOW':'MED/HIGH'} RISK</div>
-        <a href="${r.url}" target="_blank">Открыть пару</a>
-      </div>`).join('');
-    }
-
-    async function checkContract(){
-      const chain=document.getElementById('chainSel').value;
-      const c=document.getElementById('contractInput').value.trim();
-      if(!c) return;
-      const chainMap={ethereum:'1',bsc:'56',base:'8453',arbitrum:'42161'};
-      const data=await fetch(`https://api.gopluslabs.io/api/v1/token_security/${chainMap[chain]}?contract_addresses=${c}`).then(r=>r.json()).catch(()=>null);
-      const item=(data?.result?.[c.toLowerCase()])||(data?.result?.[c])||Object.values(data?.result||{})[0]||{};
-      document.getElementById('checkResult').innerHTML=`<b>Scam Check</b><br>
-        Honeypot: ${item.is_honeypot==='1'?'ДА':'НЕТ'}<br>
-        Mint: ${item.is_mintable==='1'?'ДА':'НЕТ'}<br>
-        Blacklist: ${item.is_blacklisted==='1'?'ДА':'НЕТ'}<br>
-        Tax: ${(item.buy_tax||'N/A')}% / ${(item.sell_tax||'N/A')}%<br>
-        Open source: ${item.is_open_source==='1'?'ДА':'НЕТ'}`;
-    }
-
-    loadCoin();
-  </script>
+loadChart(); loadSignals(); loadTrends(); loadScreener(); loadSniper(); renderPortfolio(); renderAlerts();
+setInterval(async()=>{await loadScreener();await loadSniper();checkAlerts();renderPortfolio()},60000);
+</script>
 </body>
 </html>
