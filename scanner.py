@@ -75,8 +75,12 @@ def calculate_x1000_score(token: dict[str, Any], security: dict[str, Any]) -> in
         score += 10
     if liq > 0 and (v1 / liq) > 0.35:
         score += 16
-    if security.get("buy_tax") == 0 and security.get("sell_tax") == 0:
+    bt = security.get("buy_tax")
+    st = security.get("sell_tax")
+    if bt == 0 and st == 0:
         score += 12
+    elif st is not None and float(st) < 10 and (bt is None or float(bt) < 10):
+        score += 9
     if not security.get("is_honeypot"):
         score += 10
     return max(0, min(100, score))
@@ -104,7 +108,6 @@ class MultiChainScanner:
                     if resp.status >= 400:
                         raise RuntimeError(f"HTTP {resp.status}")
                     data = await resp.json(content_type=None)
-                    print(f"[scanner] GET {url} params={params} -> keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
                     return data
             except Exception as exc:
                 last_error = exc
@@ -162,7 +165,6 @@ class MultiChainScanner:
     async def _query_search(self, query: str) -> list[dict[str, Any]]:
         data = await self._get_json(SEARCH_URL, params={"q": query})
         pairs = data.get("pairs", []) if isinstance(data, dict) else []
-        print(f"[scanner] query={query} raw_pairs={len(pairs)}")
         rows = []
         for pair in pairs:
             normalized = self._normalize_pair(pair)
@@ -173,7 +175,6 @@ class MultiChainScanner:
     async def _query_trending(self) -> list[dict[str, Any]]:
         data = await self._get_json(TRENDING_URL)
         pairs = (data.get("pairs") or []) if isinstance(data, dict) else []
-        print(f"[scanner] trending raw_pairs={len(pairs)}")
         rows = []
         for pair in pairs:
             normalized = self._normalize_pair(pair)
@@ -211,7 +212,6 @@ class MultiChainScanner:
         else:
             filtered = filtered[:20]
 
-        print(f"[scanner] dedup={len(dedup)} filtered={len(filtered)}")
         return filtered
 
     async def scan_new_tokens(self, max_age_hours: float = 24.0) -> list[dict[str, Any]]:
