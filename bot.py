@@ -1,41 +1,346 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message
+from dotenv import load_dotenv
+
+from alerts import AlertManager
+from contract_checker import ContractSecurityChecker
+from scanner import MultiChainScanner
+from sniper import scanner_loop as sniper_loop
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+
+dp = Dispatcher()
+scanner = MultiChainScanner()
+checker = ContractSecurityChecker()
+alerts = AlertManager()
+
+
+def ensure_users_file() -> None:
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text("[]", encoding="utf-8")
+
+
+def load_users() -> set[int]:
+    ensure_users_file()
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        return {int(x) for x in data if str(x).isdigit()}
+    except Exception:
+        return set()
+
+
+def save_user(user_id: int) -> None:
+    users = load_users()
+    users.add(user_id)
+    USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
+
+
+def fmt_money(v: float) -> str:
+    if v >= 1_000_000_000:
+        return f"${v / 1_000_000_000:.2f}B"
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.2f}M"
+    if v >= 1_000:
+        return f"${v / 1_000:.1f}K"
+    return f"${v:,.0f}"
+
+
+def format_token(row: dict[str, Any]) -> str:
+    listed = f"{row['age_hours']:.1f} ч" if row["age_hours"] >= 1 else f"{int(row['age_hours'] * 60)} мин"
+    return (
+        "🆕 *НОВЫЙ ТОКЕН*\n"
+        f"📛 Название: {row['name']} ({row['symbol']})\n"
+        f"🔗 Сеть: {row['chain'].upper()}\n"
+        f"⏰ Листинг: {listed} назад\n"
+        f"👥 Холдеры: {int(row['holders']):,}\n"
+        f"💧 Ликвидность: {fmt_money(float(row['liquidity']))}\n"
+        f"💰 Капа: {fmt_money(float(row['market_cap']))}\n"
+        f"📊 Объём 24ч: {fmt_money(float(row['volume_24h']))}\n"
+        f"🟢 Налог: {row['buy_tax']}% / {row['sell_tax']}%\n"
+        f"✅ Honeypot: {'Нет' if not row['is_honeypot'] else 'Да'}\n"
+        f"✅ Mint: {'Отключен' if not row['is_mintable'] else 'Активен'}\n"
+        f"🔒 Ликвидность: {'Заблокирована' if row['lp_locked'] else 'Не заблокирована'}\n"
+        f"📈 Сигнал: {'СМОТРЕТЬ' if row['risk_score'] <= 25 else 'ОСТОРОЖНО'}\n"
+        f"⚠️ Риск скама: {row['risk_score']}/100\n"
+        f"🔍 [DexScreener]({row['dex_url']})"
+    )
+
+
+async def run_scan(message: Message, mode: str) -> None:
+    save_user(message.from_user.id)
+    msg = await message.answer("🔍 Сканирую все сети...")
+    try:
+        rows = await scanner.scan_new_tokens(max_age_hours=24)
+    except Exception as exc:
+        logger.exception("scan error")
+        await msg.edit_text(f"❌ Ошибка сканирования: {str(exc)[:180]}")
+        return
+
+    if mode == "new":
+        rows = [x for x in rows if x["age_hours"] <= 6]
+    elif mode == "hot":
+        rows.sort(key=lambda x: x["volume_1h"], reverse=True)
+    elif mode == "safe":
+        rows = [x for x in rows if x["risk_score"] <= 20 and not x["is_honeypot"]]
+    elif mode == "meme":
+        rows = [x for x in rows if any(k in (x["name"] + x["symbol"]).lower() for k in ("pepe", "doge", "inu", "cat", "frog"))]
+    elif mode == "defi":
+        rows = [x for x in rows if any(k in (x["name"] + x["symbol"]).lower() for k in ("swap", "dex", "yield", "farm", "vault"))]
+
+    if not rows:
+        await msg.edit_text("Подходящих токенов не найдено.")
+        return
+    await msg.edit_text("\n\n".join(format_token(x) for x in rows[:4]), parse_mode="Markdown", disable_web_page_preview=True)
+
+
+@dp.message(CommandStart())
+async def start(message: Message) -> None:
+    save_user(message.from_user.id)
+    await message.answer(
+        "🚀 *CRYPTO_BOT Screener Online*\n\n"
+        "`/new` — листинг до 6 часов\n"
+        "`/scan` — новые токены до 24ч\n"
+        "`/meme` — мем-коины\n"
+        "`/defi` — DeFi\n"
+        "`/check <chain> <contract>` — проверка контракта\n"
+        "`/hot` — топ по объёму 1ч\n"
+        "`/safe` — без скам-флагов\n"
+        "`/alertprice <SYM> <above|below> <price>`\n"
+        "`/alertvol <SYM> <min_volume_1h>`\n"
+        "`/alertnew <chain> [minutes]`\n"
+        "`/alerts`",
+        parse_mode="Markdown",
+    )
+
+
+@dp.message(Command("scan"))
+async def cmd_scan(message: Message) -> None:
+    await run_scan(message, "scan")
+
+
+@dp.message(Command("new"))
+async def cmd_new(message: Message) -> None:
+    await run_scan(message, "new")
+
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: Message) -> None:
+    await run_scan(message, "meme")
+
+
+@dp.message(Command("defi"))
+async def cmd_defi(message: Message) -> None:
+    await run_scan(message, "defi")
+
+
+@dp.message(Command("hot"))
+async def cmd_hot(message: Message) -> None:
+    await run_scan(message, "hot")
+
+
+@dp.message(Command("safe"))
+async def cmd_safe(message: Message) -> None:
+    await run_scan(message, "safe")
+
+
+@dp.message(Command("check"))
+async def cmd_check(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Использование: `/check eth 0x...`", parse_mode="Markdown")
+        return
+    chain = parts[1].lower()
+    contract = parts[2].strip()
+    msg = await message.answer("🧪 Проверяю контракт...")
+    report = await checker.check_and_format_report(contract, chain)
+    await msg.edit_text(report, parse_mode="Markdown")
+
+
+@dp.message(Command("alertprice"))
+async def cmd_alert_price(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 4:
+        await message.answer("Использование: `/alertprice PEPE above 0.000001`", parse_mode="Markdown")
+        return
+    alerts.add_price_alert(message.from_user.id, parts[1], float(parts[3]), parts[2].lower())
+    await message.answer("✅ Price alert добавлен.")
+
+
+@dp.message(Command("alertvol"))
+async def cmd_alert_vol(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Использование: `/alertvol PEPE 150000`", parse_mode="Markdown")
+        return
+    alerts.add_volume_alert(message.from_user.id, parts[1], float(parts[2]))
+    await message.answer("✅ Volume alert добавлен.")
+
+
+@dp.message(Command("alertnew"))
+async def cmd_alert_new(message: Message) -> None:
+    save_user(message.from_user.id)
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: `/alertnew eth 30`", parse_mode="Markdown")
+        return
+    minutes = int(parts[2]) if len(parts) > 2 else 30
+    alerts.add_listing_alert(message.from_user.id, parts[1], minutes)
+    await message.answer("✅ New listing alert добавлен.")
+
+
+@dp.message(Command("alerts"))
+async def cmd_alerts(message: Message) -> None:
+    save_user(message.from_user.id)
+    user_alerts = alerts.get_user_alerts(message.from_user.id)
+    if not user_alerts:
+        await message.answer("Алертов нет.")
+        return
+    lines = ["🔔 *Мои алерты*"]
+    for idx, a in enumerate(user_alerts, 1):
+        lines.append(f"{idx}. `{a['type']}` {a['symbol']} {a['condition']} {a['value']}")
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+async def alert_worker(bot: Bot) -> None:
+    while True:
+        try:
+            rows = await scanner.scan_new_tokens(max_age_hours=24)
+            for user_id, text in alerts.evaluate(rows):
+                try:
+                    await bot.send_message(user_id, text)
+                except Exception as exc:
+                    logger.warning("alert send failed %s: %s", user_id, exc)
+        except Exception as exc:
+            logger.exception("alert worker error: %s", exc)
+        await asyncio.sleep(30)
+
+
+async def auto_digest_worker(bot: Bot) -> None:
+    while True:
+        try:
+            rows = await scanner.scan_new_tokens(max_age_hours=6)
+            if rows:
+                text = "🔄 Автообновление (3 мин)\n\n" + "\n\n".join(format_token(x) for x in rows[:2])
+                for uid in load_users():
+                    try:
+                        await bot.send_message(uid, text, parse_mode="Markdown", disable_web_page_preview=True)
+                    except Exception:
+                        continue
+        except Exception as exc:
+            logger.exception("digest worker error: %s", exc)
+        await asyncio.sleep(180)
+
+
+async def run_bot_forever() -> None:
+    ensure_users_file()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN отсутствует.")
+    await scanner.start()
+    bot = Bot(BOT_TOKEN)
+    asyncio.create_task(alert_worker(bot))
+    asyncio.create_task(auto_digest_worker(bot))
+    asyncio.create_task(sniper_loop(bot))
+
+    delay = 3
+    while True:
+        try:
+            logger.info("Starting polling...")
+            await dp.start_polling(bot)
+        except Exception as exc:
+            logger.exception("Polling crashed, restarting in %s sec: %s", delay, exc)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
+        else:
+            break
+
+
+if __name__ == "__main__":
+    asyncio.run(run_bot_forever())
 """
-Crypto Signal Bot — Telegram (aiogram 3.x)
-Совместим с Python 3.14
+Professional Multi-Chain New Token Screener Bot (aiogram 3.x).
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
-import json
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from aiogram.filters import CommandStart, Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from typing import Any, Optional
+
+import aiohttp
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message
 from dotenv import load_dotenv
 
-from analysis import CryptoAnalyzer
-from alerts import AlertManager
-from sniper import scanner_loop, get_sniper_status_text
-
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8537036845:AAFSl7SgBnBtX9v5HIB_9DY6CImiKkyRcAk").strip()
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
-USERS_FILE = Path(__file__).resolve().parent / "users.json"
-ENTRY_WAITING_USERS: set[int] = set()
 
-bot: Optional[Bot] = None
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+MORALIS_API_KEY = os.getenv("MORALIS_API_KEY", "").strip()
+DEXTOOLS_API_KEY = os.getenv("DEXTOOLS_API_KEY", "").strip()  # optional, reserved for extension
+USERS_FILE = Path(__file__).resolve().parent / "users.json"
+
+SUPPORTED_CHAINS = {
+    "ethereum": {"name": "Ethereum", "goplus": "1", "moralis": "eth"},
+    "bsc": {"name": "BSC", "goplus": "56", "moralis": "bsc"},
+    "solana": {"name": "Solana", "goplus": None, "moralis": "solana"},
+    "base": {"name": "Base", "goplus": "8453", "moralis": "base"},
+    "arbitrum": {"name": "Arbitrum", "goplus": "42161", "moralis": "arbitrum"},
+    "polygon": {"name": "Polygon", "goplus": "137", "moralis": "polygon"},
+}
+
+MEME_KEYWORDS = ("pepe", "doge", "inu", "meme", "cat", "frog", "elon", "moon")
+DEFI_KEYWORDS = ("swap", "dex", "yield", "farm", "lending", "vault", "staked", "finance")
+
 dp = Dispatcher()
-analyzer = CryptoAnalyzer()
-alert_manager = AlertManager()
+
+
+@dataclass
+class TokenRecord:
+    chain: str
+    name: str
+    symbol: str
+    contract: str
+    listed_hours: float
+    holders: Optional[int]
+    liquidity_usd: float
+    market_cap: float
+    volume_24h: float
+    volume_1h: float
+    buy_tax: Optional[float]
+    sell_tax: Optional[float]
+    honeypot: Optional[bool]
+    mintable: Optional[bool]
+    blacklist: Optional[bool]
+    renounced: Optional[bool]
+    contract_verified: Optional[bool]
+    liquidity_locked: Optional[bool]
+    dex_url: str
+    category: str
 
 
 def ensure_users_file() -> None:
@@ -57,397 +362,441 @@ def save_user_id(user_id: int) -> None:
     users.add(user_id)
     USERS_FILE.write_text(json.dumps(sorted(users), ensure_ascii=False), encoding="utf-8")
 
-# ─── KEYBOARDS ────────────────────────────────────────────────────────────────
 
-def main_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="📊 Анализ монеты", callback_data="menu_analyze"),
-        InlineKeyboardButton(text="🔥 Перекупленные", callback_data="menu_overbought")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🚀 Новые с потенциалом", callback_data="menu_new"),
-        InlineKeyboardButton(text="⚠️ Риск падения", callback_data="menu_dump")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🆕 Новые монеты", callback_data="menu_new_coins"),
-        InlineKeyboardButton(text="💎 Gem Finder", callback_data="menu_gems")
-    )
-    builder.row(
-        InlineKeyboardButton(text="⚡ Точка входа", callback_data="menu_entry"),
-        InlineKeyboardButton(text="📈 Топ сигналы", callback_data="menu_signals")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🔔 Мои алерты", callback_data="menu_alerts"),
-        InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text="📱 Открыть приложение",
-            web_app=WebAppInfo(url="https://vayzer11.github.io/crypto-bot/")
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value: Any) -> Optional[int]:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    txt = str(value).strip().lower()
+    if txt in {"1", "true", "yes"}:
+        return True
+    if txt in {"0", "false", "no"}:
+        return False
+    return None
+
+
+def _age_hours(created_at_ms: Any) -> float:
+    if not created_at_ms:
+        return 999.0
+    now_ms = int(time.time() * 1000)
+    return max((now_ms - int(created_at_ms)) / 3_600_000, 0.0)
+
+
+def _fmt_money(value: float) -> str:
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.1f}K"
+    return f"${value:,.0f}"
+
+
+class TokenScreener:
+    def __init__(self) -> None:
+        self.session: Optional[aiohttp.ClientSession] = None
+
+    async def start(self) -> None:
+        if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=20)
+            self.session = aiohttp.ClientSession(timeout=timeout)
+
+    async def close(self) -> None:
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    async def _get_json(self, url: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> Any:
+        assert self.session is not None
+        for attempt in range(3):
+            try:
+                async with self.session.get(url, params=params, headers=headers) as resp:
+                    if resp.status == 429:
+                        await asyncio.sleep(1.2 + attempt)
+                        continue
+                    if resp.status >= 400:
+                        body = (await resp.text())[:200]
+                        raise RuntimeError(f"{resp.status} {url} {body}")
+                    return await resp.json(content_type=None)
+            except Exception:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.8 + attempt)
+        return None
+
+    async def _fetch_candidates(self) -> list[dict[str, Any]]:
+        # DexScreener profiles/boosts are the entrypoint for fresh tokens.
+        profiles = await self._get_json("https://api.dexscreener.com/token-profiles/latest/v1")
+        boosts = await self._get_json("https://api.dexscreener.com/token-boosts/latest/v1")
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in (profiles or []):
+            chain = str(row.get("chainId", "")).lower()
+            address = str(row.get("tokenAddress", "")).lower()
+            if chain in SUPPORTED_CHAINS and address:
+                merged[(chain, address)] = row
+        for row in (boosts or []):
+            chain = str(row.get("chainId", "")).lower()
+            address = str(row.get("tokenAddress", "")).lower()
+            if chain in SUPPORTED_CHAINS and address:
+                merged[(chain, address)] = row
+        return list(merged.values())[:120]
+
+    async def _fetch_token_pairs(self, token_address: str) -> list[dict[str, Any]]:
+        raw = await self._get_json(f"https://api.dexscreener.com/latest/dex/tokens/{token_address}")
+        return raw.get("pairs", []) if isinstance(raw, dict) else []
+
+    async def _fetch_goplus_security(self, chain_key: str, contract: str) -> dict[str, Any]:
+        chain_meta = SUPPORTED_CHAINS[chain_key]
+        chain_id = chain_meta["goplus"]
+        if not chain_id:
+            return {}
+        url = f"https://api.gopluslabs.io/api/v1/token_security/{chain_id}"
+        data = await self._get_json(url, params={"contract_addresses": contract})
+        result = (data or {}).get("result", {})
+        return result.get(contract.lower()) or result.get(contract) or {}
+
+    async def _fetch_moralis_holders(self, chain_key: str, contract: str) -> Optional[int]:
+        if not MORALIS_API_KEY:
+            return None
+        chain = SUPPORTED_CHAINS[chain_key]["moralis"]
+        headers = {"X-API-Key": MORALIS_API_KEY}
+        url = f"https://deep-index.moralis.io/api/v2.2/erc20/{contract}/holders"
+        data = await self._get_json(url, params={"chain": chain}, headers=headers)
+        return _to_int((data or {}).get("total"))
+
+    def _classify(self, name: str, symbol: str) -> str:
+        text = f"{name} {symbol}".lower()
+        if any(k in text for k in MEME_KEYWORDS):
+            return "meme"
+        if any(k in text for k in DEFI_KEYWORDS):
+            return "defi"
+        return "other"
+
+    def _scam_flags(self, t: TokenRecord) -> list[str]:
+        flags: list[str] = []
+        if t.honeypot is True:
+            flags.append("Honeypot")
+        if t.mintable is True:
+            flags.append("Mint active")
+        if t.blacklist is True:
+            flags.append("Blacklist function")
+        if (t.buy_tax is not None and t.buy_tax > 10) or (t.sell_tax is not None and t.sell_tax > 10):
+            flags.append("Tax > 10%")
+        if t.liquidity_locked is False:
+            flags.append("Liquidity not locked")
+        if t.holders is not None and t.holders < 100:
+            flags.append("Holders < 100")
+        if t.contract_verified is False:
+            flags.append("Contract not verified")
+        return flags
+
+    def _is_safe(self, t: TokenRecord) -> bool:
+        return len(self._scam_flags(t)) == 0
+
+    def _score(self, t: TokenRecord) -> float:
+        score = 0.0
+        score += min(t.liquidity_usd / 100_000, 2.0) * 20
+        score += min(t.volume_24h / 250_000, 2.0) * 20
+        score += 15 if t.buy_tax == 0 and t.sell_tax == 0 else 0
+        score += 15 if self._is_safe(t) else 0
+        score += min((t.holders or 0) / 4000, 2.0) * 15
+        score += 10 if t.listed_hours <= 6 else 0
+        return round(score, 1)
+
+    async def _build_record(self, pair: dict[str, Any]) -> Optional[TokenRecord]:
+        chain_key = str(pair.get("chainId", "")).lower()
+        if chain_key not in SUPPORTED_CHAINS:
+            return None
+        base = pair.get("baseToken", {}) or {}
+        contract = str(base.get("address", "")).strip()
+        if not contract:
+            return None
+        sec = await self._fetch_goplus_security(chain_key, contract)
+        holders = _to_int(sec.get("holder_count"))
+        if holders is None:
+            holders = await self._fetch_moralis_holders(chain_key, contract)
+
+        liquidity_locked = _to_bool(sec.get("lp_locked"))
+        if liquidity_locked is None:
+            liquidity_locked = _to_bool(sec.get("is_locked"))
+        renounced = _to_bool(sec.get("owner_address")) is False if "owner_address" in sec else _to_bool(sec.get("is_renounced"))
+        verified = _to_bool(sec.get("is_open_source"))
+        buy_tax = _to_float(sec.get("buy_tax"), default=-1.0)
+        sell_tax = _to_float(sec.get("sell_tax"), default=-1.0)
+
+        return TokenRecord(
+            chain=SUPPORTED_CHAINS[chain_key]["name"],
+            name=str(base.get("name", "Unknown")),
+            symbol=str(base.get("symbol", "UNK")),
+            contract=contract,
+            listed_hours=_age_hours(pair.get("pairCreatedAt")),
+            holders=holders,
+            liquidity_usd=_to_float((pair.get("liquidity") or {}).get("usd")),
+            market_cap=_to_float(pair.get("marketCap") or pair.get("fdv")),
+            volume_24h=_to_float((pair.get("volume") or {}).get("h24")),
+            volume_1h=_to_float((pair.get("volume") or {}).get("h1")),
+            buy_tax=None if buy_tax < 0 else buy_tax,
+            sell_tax=None if sell_tax < 0 else sell_tax,
+            honeypot=_to_bool(sec.get("is_honeypot")),
+            mintable=_to_bool(sec.get("is_mintable")),
+            blacklist=_to_bool(sec.get("is_blacklisted")),
+            renounced=renounced,
+            contract_verified=verified,
+            liquidity_locked=liquidity_locked,
+            dex_url=str(pair.get("url", "")),
+            category=self._classify(str(base.get("name", "")), str(base.get("symbol", ""))),
         )
+
+    async def scan(self) -> list[TokenRecord]:
+        candidates = await self._fetch_candidates()
+        records: list[TokenRecord] = []
+        seen: set[str] = set()
+
+        for c in candidates:
+            token_address = str(c.get("tokenAddress", "")).strip()
+            if not token_address or token_address.lower() in seen:
+                continue
+            seen.add(token_address.lower())
+            try:
+                pairs = await self._fetch_token_pairs(token_address)
+            except Exception as exc:
+                logger.warning("pairs error %s: %s", token_address, exc)
+                continue
+            # Keep the most liquid pair in supported chains.
+            valid_pairs = [p for p in pairs if str((p or {}).get("chainId", "")).lower() in SUPPORTED_CHAINS]
+            if not valid_pairs:
+                continue
+            chosen = max(valid_pairs, key=lambda p: _to_float((p.get("liquidity") or {}).get("usd")))
+            try:
+                rec = await self._build_record(chosen)
+            except Exception as exc:
+                logger.warning("record build error %s: %s", token_address, exc)
+                continue
+            if rec is not None:
+                records.append(rec)
+        return records
+
+
+screener = TokenScreener()
+last_auto_digest = ""
+
+
+def _passes_base_filters(t: TokenRecord) -> bool:
+    return t.holders is not None and t.holders >= 2000 and t.liquidity_usd >= 50_000
+
+
+def _signal(t: TokenRecord) -> str:
+    flags = screener._scam_flags(t)
+    if flags:
+        return "ОСТОРОЖНО"
+    if t.buy_tax == 0 and t.sell_tax == 0 and t.liquidity_usd >= 100_000:
+        return "СМОТРЕТЬ"
+    return "НЕЙТРАЛЬНО"
+
+
+def _format_token(t: TokenRecord) -> str:
+    tax_text = "N/A" if t.buy_tax is None or t.sell_tax is None else f"{t.buy_tax:.0f}% / {t.sell_tax:.0f}%"
+    flags = screener._scam_flags(t)
+    warning = "⚠️ " + ", ".join(flags) if flags else "✅ Рисков не обнаружено"
+    listed = f"{t.listed_hours:.1f} ч" if t.listed_hours >= 1 else f"{int(t.listed_hours * 60)} мин"
+    return (
+        "🆕 *НОВЫЙ ТОКЕН*\n"
+        f"📛 Название: {t.name} ({t.symbol})\n"
+        f"🔗 Сеть: {t.chain}\n"
+        f"⏰ Листинг: {listed} назад\n"
+        f"👥 Холдеры: {t.holders:,}\n"
+        f"💧 Ликвидность: {_fmt_money(t.liquidity_usd)}\n"
+        f"💰 Капа: {_fmt_money(t.market_cap)}\n"
+        f"📊 Объём 24ч: {_fmt_money(t.volume_24h)}\n"
+        f"🟢 Налог: {tax_text}\n"
+        f"✅ Honeypot: {'Нет' if t.honeypot is False else 'Да' if t.honeypot else 'Неизвестно'}\n"
+        f"✅ Mint: {'Отключен' if t.mintable is False else 'Активен' if t.mintable else 'Неизвестно'}\n"
+        f"🔒 Ликвидность: {'Заблокирована' if t.liquidity_locked else 'Не заблокирована' if t.liquidity_locked is False else 'Неизвестно'}\n"
+        f"📈 Сигнал: {_signal(t)}\n"
+        f"{warning}\n"
+        f"🔍 [DexScreener]({t.dex_url})"
     )
-    return builder.as_markup()
 
-def back_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu_main"))
-    return builder.as_markup()
 
-# ─── COMMANDS ─────────────────────────────────────────────────────────────────
+async def _run_scan(message: Message, *, mode: str) -> None:
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🔍 Сканирую новые токены по всем сетям...")
+    try:
+        rows = await screener.scan()
+    except Exception as exc:
+        logger.exception("scan failed")
+        await msg.edit_text(f"❌ Ошибка сканирования: {str(exc)[:160]}")
+        return
+
+    filtered = [t for t in rows if _passes_base_filters(t)]
+    if mode == "new":
+        filtered = [t for t in filtered if t.listed_hours <= 6]
+    elif mode == "meme":
+        filtered = [t for t in filtered if t.category == "meme"]
+    elif mode == "defi":
+        filtered = [t for t in filtered if t.category == "defi"]
+    elif mode == "safe":
+        filtered = [t for t in filtered if screener._is_safe(t)]
+    elif mode == "hot":
+        filtered.sort(key=lambda x: x.volume_1h, reverse=True)
+        filtered = filtered[:8]
+
+    if mode != "hot":
+        filtered.sort(key=lambda x: (screener._score(x), x.volume_24h), reverse=True)
+        filtered = filtered[:8]
+
+    if not filtered:
+        await msg.edit_text("Нет токенов под критерии: холдеры >= 2000, ликвидность >= $50k, поддерживаемые сети.")
+        return
+
+    text = "\n\n".join(_format_token(t) for t in filtered[:4])
+    await msg.edit_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+
 
 @dp.message(CommandStart())
-async def start(message: Message):
+async def start(message: Message) -> None:
     save_user_id(message.from_user.id)
     text = (
-        "👋 *Crypto Signal Bot* запущен!\n\n"
-        "Я анализирую рынок в реальном времени и нахожу:\n"
-        "• Точки входа и выхода\n"
-        "• Перекупленные монеты (RSI > 70)\n"
-        "• Новые монеты с крупным капиталом\n"
-        "• Монеты под риском дампа\n\n"
-        "Выбери действие:"
+        "🚀 *New Token Screener Bot активен*\n\n"
+        "Сети: Ethereum, BSC, Solana, Base, Arbitrum, Polygon.\n"
+        "Фильтры: холдеры >= 2000, ликвидность >= $50k, антискам-проверки.\n\n"
+        "*Команды:*\n"
+        "`/new` — листинг до 6 часов\n"
+        "`/scan` — все новые токены\n"
+        "`/meme` — только мем-коины\n"
+        "`/defi` — только DeFi\n"
+        "`/check 0x...` — проверка контракта\n"
+        "`/hot` — топ по объему за 1ч\n"
+        "`/safe` — токены без scam-флагов"
     )
-    await message.answer(text, parse_mode="Markdown", reply_markup=main_keyboard())
+    await message.answer(text, parse_mode="Markdown")
 
-@dp.message(Command(commands=["analyze", "a"]))
-async def analyze_command(message: Message):
-    save_user_id(message.from_user.id)
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer(
-            "📊 Укажи символ монеты:\n`/analyze BTC`\n`/analyze ETH`\n`/analyze SOL`",
-            parse_mode="Markdown"
-        )
-        return
-    symbol = parts[1].upper()
-    msg = await message.answer(f"⏳ Анализирую {symbol}...")
-    result = await analyzer.full_analysis(symbol)
-    await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
 
 @dp.message(Command("scan"))
-async def scan_command(message: Message):
-    save_user_id(message.from_user.id)
-    msg = await message.answer("🔍 Сканирую рынок...")
-    result = await analyzer.market_scan()
-    await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+async def cmd_scan(message: Message) -> None:
+    await _run_scan(message, mode="scan")
 
-@dp.message(Command("alert"))
-async def alert_command(message: Message):
-    save_user_id(message.from_user.id)
-    parts = message.text.split()
-    if len(parts) < 3:
-        await message.answer(
-            "🔔 Добавить алерт:\n`/alert BTC 90000`\n`/alert ETH 2500 below`",
-            parse_mode="Markdown"
-        )
-        return
-    symbol = parts[1].upper()
-    try:
-        price = float(parts[2])
-    except ValueError:
-        await message.answer("❌ Неверная цена")
-        return
-    direction = "below" if len(parts) > 3 and parts[3].lower() == "below" else "above"
-    user_id = message.from_user.id
-    alert_manager.add_alert(user_id, symbol, price, direction)
-    dir_text = "≤" if direction == "below" else "≥"
-    await message.answer(
-        f"✅ Алерт добавлен!\n*{symbol}* {dir_text} ${price:,.2f}",
-        parse_mode="Markdown"
-    )
 
-@dp.message(Command("alerts"))
-async def alerts_command(message: Message):
-    save_user_id(message.from_user.id)
-    user_id = message.from_user.id
-    alerts = alert_manager.get_user_alerts(user_id)
-    if not alerts:
-        await message.answer("Алертов нет. Добавить: `/alert BTC 90000`", parse_mode="Markdown")
-        return
-    lines = ["🔔 *Мои алерты*\n"]
-    for i, a in enumerate(alerts, 1):
-        dir_sym = "≤" if a["direction"] == "below" else "≥"
-        lines.append(f"{i}. *{a['symbol']}* {dir_sym} ${a['price']:,.2f}")
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+@dp.message(Command("new"))
+async def cmd_new(message: Message) -> None:
+    await _run_scan(message, mode="new")
 
-@dp.message(Command("delalert"))
-async def delalert_command(message: Message):
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: Message) -> None:
+    await _run_scan(message, mode="meme")
+
+
+@dp.message(Command("defi"))
+async def cmd_defi(message: Message) -> None:
+    await _run_scan(message, mode="defi")
+
+
+@dp.message(Command("hot"))
+async def cmd_hot(message: Message) -> None:
+    await _run_scan(message, mode="hot")
+
+
+@dp.message(Command("safe"))
+async def cmd_safe(message: Message) -> None:
+    await _run_scan(message, mode="safe")
+
+
+@dp.message(Command("check"))
+async def cmd_check(message: Message) -> None:
     save_user_id(message.from_user.id)
     parts = message.text.split()
     if len(parts) < 2:
-        await message.answer("Использование: `/delalert 1`", parse_mode="Markdown")
+        await message.answer("Использование: `/check 0x...`", parse_mode="Markdown")
         return
-    try:
-        idx = int(parts[1]) - 1
-    except ValueError:
-        await message.answer("❌ Неверный номер")
+    contract = parts[1].strip()
+    if len(contract) < 20:
+        await message.answer("Неверный адрес контракта.")
         return
-    user_id = message.from_user.id
-    if alert_manager.remove_alert(user_id, idx):
-        await message.answer("✅ Алерт удалён")
-    else:
-        await message.answer("❌ Алерт не найден")
 
-
-@dp.message(Command("sniper"))
-async def sniper_status_command(message: Message):
-    save_user_id(message.from_user.id)
-    await message.answer(get_sniper_status_text(), parse_mode="Markdown")
-
-# ─── TEXT HANDLER ─────────────────────────────────────────────────────────────
-
-@dp.message(F.text)
-async def text_handler(message: Message):
-    save_user_id(message.from_user.id)
-    text = message.text.strip().upper()
-    if message.from_user.id in ENTRY_WAITING_USERS:
-        ENTRY_WAITING_USERS.discard(message.from_user.id)
-        msg = await message.answer(f"⏳ Ищу точку входа для {text}...")
-        result = await analyzer.detect_entry_signal(text)
-        if result.get("error"):
-            await msg.edit_text(f"❌ {result['error']}", reply_markup=back_keyboard())
-            return
-        patterns = result.get("patterns", [])
-        if not patterns:
-            body = f"⚡ *Точка входа: {text}*\n\nСильных паттернов пока нет.\nЦена: {result.get('price', 0):.6f}"
-        else:
-            lines = [f"⚡ *Точка входа: {text}*\n", f"Цена: `{result.get('price', 0):.6f}` | 24ч: `{result.get('change_24h', 0):+.2f}%`\n", "*Найденные паттерны:*"]
-            for p in patterns:
-                lines.append(f"• `{p['type']}` — {p['name']} ({p['strength']})")
-            body = "\n".join(lines)
-        await msg.edit_text(body, parse_mode="Markdown", reply_markup=back_keyboard())
-        return
-    if 2 <= len(text) <= 10 and text.isalpha():
-        msg = await message.answer(f"⏳ Анализирую {text}...")
-        result = await analyzer.full_analysis(text)
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-
-# ─── CALLBACKS ────────────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data == "menu_main")
-async def cb_main(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer()
-    await query.message.answer(
-        "👋 *Crypto Signal Bot*\nВыбери действие:",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
-    )
-
-@dp.callback_query(F.data == "menu_analyze")
-async def cb_analyze(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer()
-    await query.message.answer(
-        "📊 *Анализ монеты*\n\nПросто напиши символ монеты:\n`BTC` `ETH` `SOL` `RENDER` `TAO`\n\n"
-        "Или команда: `/analyze BTC`",
-        parse_mode="Markdown",
-        reply_markup=back_keyboard()
-    )
-
-@dp.callback_query(F.data == "menu_overbought")
-async def cb_overbought(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Загружаю данные...")
-    msg = await query.message.answer("🔍 Ищу перекупленные монеты (RSI > 68)...")
+    msg = await message.answer("🧪 Проверяю контракт...")
     try:
-        result = await analyzer.find_overbought()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_new")
-async def cb_new(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Загружаю данные...")
-    msg = await query.message.answer("🔍 Ищу монеты с потенциалом...")
-    try:
-        result = await analyzer.find_new_potential()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_dump")
-async def cb_dump(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Загружаю данные...")
-    msg = await query.message.answer("🔍 Ищу монеты под риском дампа...")
-    try:
-        result = await analyzer.find_dump_risk()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_new_coins")
-async def cb_new_coins(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Сканирую рынок...")
-    msg = await query.message.answer("🆕 Ищу новые монеты, листинги и тренды...")
-    try:
-        result = await analyzer.find_new_coins()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_gems")
-async def cb_gems(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Ищу gems...")
-    msg = await query.message.answer("💎 Запускаю Gem Finder...")
-    try:
-        result = await analyzer.find_gems()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_entry")
-async def cb_entry_menu(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    ENTRY_WAITING_USERS.add(query.from_user.id)
-    await query.answer()
-    await query.message.answer(
-        "⚡ Введи символ монеты для поиска точки входа.\nПример: `BTC` или `SOL`",
-        parse_mode="Markdown",
-        reply_markup=back_keyboard(),
-    )
-
-@dp.callback_query(F.data == "menu_signals")
-async def cb_signals(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer("Загружаю данные...")
-    msg = await query.message.answer("🔍 Генерирую топ сигналы...")
-    try:
-        result = await analyzer.top_signals()
-        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_alerts")
-async def cb_alerts(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer()
-    user_id = query.from_user.id
-    alerts = alert_manager.get_user_alerts(user_id)
-    if not alerts:
-        text = "🔔 *Мои алерты*\n\nАлертов нет.\n\nДобавить: `/alert BTC 90000`"
-    else:
-        lines = ["🔔 *Мои алерты*\n"]
-        for i, a in enumerate(alerts, 1):
-            dir_sym = "≤" if a["direction"] == "below" else "≥"
-            lines.append(f"{i}. *{a['symbol']}* {dir_sym} ${a['price']:,.2f}")
-        lines.append("\nУдалить: `/delalert 1`")
-        text = "\n".join(lines)
-    await query.message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
-
-@dp.callback_query(F.data == "menu_help")
-async def cb_help(query: CallbackQuery):
-    save_user_id(query.from_user.id)
-    await query.answer()
-    text = (
-        "❓ *Команды бота*\n\n"
-        "`/analyze BTC` — полный теханализ\n"
-        "`/scan` — скан топ-50 рынка\n"
-        "`/alert BTC 90000` — алерт выше цены\n"
-        "`/alert ETH 2500 below` — алерт ниже цены\n"
-        "`/alerts` — мои алерты\n"
-        "`/delalert 1` — удалить алерт №1\n\n"
-        "`/entry BTC` — детектор точки входа\n\n"
-        "Или просто напиши символ: `BTC` `ETH` `SOL`\n\n"
-        "*Индикаторы:*\n"
-        "• RSI — перекуплен/перепродан\n"
-        "• MACD — тренд и импульс\n"
-        "• Bollinger Bands — волатильность\n"
-        "• EMA 20/50 — тренд\n"
-        "• Fear and Greed Index — настроение рынка\n"
-        "• TVL — ликвидность протокола\n\n"
-        "*Сигналы:*\n"
-        "🟢 ПОКУПАТЬ | 🟡 ЖДАТЬ | 🔴 ПРОДАВАТЬ"
-    )
-    await query.message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
-
-@dp.message(Command("entry"))
-async def entry_command(message: Message):
-    save_user_id(message.from_user.id)
-    parts = message.text.split()
-    if len(parts) < 2:
-        ENTRY_WAITING_USERS.add(message.from_user.id)
-        await message.answer("⚡ Укажи символ: `/entry BTC` или просто отправь символ следующим сообщением.", parse_mode="Markdown")
-        return
-    symbol = parts[1].upper()
-    msg = await message.answer(f"⏳ Анализирую точку входа для {symbol}...")
-    result = await analyzer.detect_entry_signal(symbol)
-    if result.get("error"):
-        await msg.edit_text(f"❌ {result['error']}", reply_markup=back_keyboard())
-        return
-    patterns = result.get("patterns", [])
-    if not patterns:
-        await msg.edit_text(
-            f"⚡ *{symbol}*: сильных входных паттернов пока нет.\nЦена: `{result.get('price', 0):.6f}`",
-            parse_mode="Markdown",
-            reply_markup=back_keyboard(),
-        )
-        return
-    lines = [f"⚡ *Точка входа: {symbol}*", f"Цена: `{result.get('price', 0):.6f}` | 24ч: `{result.get('change_24h', 0):+.2f}%`", "", "*Паттерны:*"]
-    for p in patterns:
-        lines.append(f"• `{p['type']}` — {p['name']} ({p['strength']})")
-    await msg.edit_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_keyboard())
-
-# ─── ALERTS BACKGROUND TASK ───────────────────────────────────────────────────
-
-async def check_alerts_loop(bot_instance: Bot):
-    while True:
-        try:
-            triggered = await alert_manager.check_alerts(analyzer)
-            for user_id, message in triggered:
-                try:
-                    await bot_instance.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
-                except Exception as e:
-                    logger.error(f"Alert send error for {user_id}: {e}")
-        except Exception as e:
-            logger.error(f"Alert check error: {e}")
-        await asyncio.sleep(60)
-
-async def auto_broadcast_loop(bot_instance: Bot) -> None:
-    """Каждые 6 часов: топ-3 сигнала на покупку + 2 гема всем пользователям."""
-    await asyncio.sleep(120)
-    while True:
-        try:
-            text = await analyzer.auto_broadcast_message()
-            if not text:
-                await asyncio.sleep(21_600)
-                continue
-            for user_id in load_users():
-                try:
-                    await bot_instance.send_message(user_id, text, parse_mode="Markdown")
-                except Exception as exc:
-                    logger.error("auto_broadcast send %s: %s", user_id, exc)
-        except Exception as exc:
-            logger.error("auto_broadcast_loop: %s", exc)
-        await asyncio.sleep(21_600)
-
-
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
-
-async def main():
-    ensure_users_file()
-    if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY не задан — блок Claude (если используется) недоступен.")
-    if not GROQ_API_KEY:
-        logger.warning("GROQ_API_KEY не задан — AI-анализ Groq будет с заглушками.")
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN не задан. Укажи токен в переменных окружения Railway или терминала.")
-
-    global bot
-    try:
-        bot = Bot(token=BOT_TOKEN)
+        pairs = await screener._fetch_token_pairs(contract)
     except Exception as exc:
-        raise RuntimeError("BOT_TOKEN невалидный. Получи новый токен у BotFather и обнови переменную окружения.") from exc
-    logger.info("Bot started. Polling...")
-    asyncio.create_task(check_alerts_loop(bot))
-    asyncio.create_task(auto_broadcast_loop(bot))
-    asyncio.create_task(scanner_loop(bot))
-    await dp.start_polling(bot)
+        await msg.edit_text(f"❌ Ошибка DexScreener: {str(exc)[:160]}")
+        return
+    if not pairs:
+        await msg.edit_text("Контракт не найден в DexScreener.")
+        return
+
+    supported_pairs = [p for p in pairs if str((p or {}).get("chainId", "")).lower() in SUPPORTED_CHAINS]
+    if not supported_pairs:
+        await msg.edit_text("Контракт найден, но сеть не входит в поддерживаемые ETH/BSC/SOL/BASE/ARB/POL.")
+        return
+
+    pair = max(supported_pairs, key=lambda p: _to_float((p.get("liquidity") or {}).get("usd")))
+    rec = await screener._build_record(pair)
+    if rec is None:
+        await msg.edit_text("Не удалось построить профиль токена.")
+        return
+    await msg.edit_text(_format_token(rec), parse_mode="Markdown", disable_web_page_preview=True)
+
+
+async def auto_update_loop(bot_instance: Bot) -> None:
+    global last_auto_digest
+    await asyncio.sleep(20)
+    while True:
+        try:
+            rows = await screener.scan()
+            filtered = [t for t in rows if _passes_base_filters(t) and t.listed_hours <= 6]
+            filtered.sort(key=lambda x: (screener._score(x), x.volume_24h), reverse=True)
+            top = filtered[:3]
+            if top:
+                body = "🔄 *Автообновление (каждые 3 мин)*\n\n" + "\n\n".join(_format_token(t) for t in top)
+                digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                if digest != last_auto_digest:
+                    last_auto_digest = digest
+                    for user_id in load_users():
+                        try:
+                            await bot_instance.send_message(
+                                user_id, body, parse_mode="Markdown", disable_web_page_preview=True
+                            )
+                        except Exception as exc:
+                            logger.warning("auto update send failed for %s: %s", user_id, exc)
+        except Exception as exc:
+            logger.exception("auto update loop error: %s", exc)
+        await asyncio.sleep(180)
+
+
+async def main() -> None:
+    ensure_users_file()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN не задан в окружении.")
+    if not MORALIS_API_KEY:
+        logger.warning("MORALIS_API_KEY не задан: холдеры будут только из GoPlus, где доступны.")
+    if not DEXTOOLS_API_KEY:
+        logger.info("DEXTOOLS_API_KEY не задан: бот работает без расширенных метрик DexTools.")
+
+    await screener.start()
+    bot = Bot(token=BOT_TOKEN)
+    asyncio.create_task(auto_update_loop(bot))
+    logger.info("New token screener bot started")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await screener.close()
+
 
 if __name__ == "__main__":
     try:

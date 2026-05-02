@@ -3,24 +3,16 @@
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import aiohttp
-
-from contract_checker import ContractSecurityChecker
-from scanner import MemecoinScanner, calculate_x1000_score, load_seen_tokens, save_seen_tokens, token_uid
+from scanner import MultiChainScanner, calculate_x1000_score, load_seen_tokens, save_seen_tokens, token_uid
 
 logger = logging.getLogger(__name__)
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
 
-scanner = MemecoinScanner()
-checker = ContractSecurityChecker()
+scanner = MultiChainScanner()
 
 SCANNER_STATE: dict[str, Any] = {
     "running": False,
@@ -36,13 +28,6 @@ SCANNER_STATE: dict[str, Any] = {
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
     except (TypeError, ValueError):
         return default
 
@@ -105,39 +90,14 @@ def _fmt_usd(v: float) -> str:
 
 
 async def _ai_text_ru(token: dict[str, Any], score: int) -> str:
-    if not GROQ_API_KEY:
-        return (
-            "Ранний токен с высокой волатильностью: потенциал роста ограничен ликвидностью и риском скама. "
-            "Вход только микролотом и только после собственной проверки контракта."
-        )
-    prompt = (
-        "Дай ровно 2 коротких предложения на русском для трейдеров Telegram о этом токене: "
-        "кратко риск и что смотреть (ликвидность/налоги). Без приветствий и без списков.\n"
-        f"Символ: {token.get('symbol')} | сеть: {token.get('chain')} | score: {score}/100 | "
-        f"капа USD: {token.get('market_cap')} | ликв.: {token.get('liquidity')} | vol24: {token.get('volume_24h')}"
-    )
-    body = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 120,
-        "temperature": 0.35,
-    }
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
-            async with session.post(GROQ_API, json=body, headers=headers) as resp:
-                if resp.status != 200:
-                    return "Высокий риск из-за возраста токена и тонкой ликвидности; проверяй налоги и блокировку LP перед входом."
-                data = await resp.json()
-                return str(data["choices"][0]["message"]["content"]).strip()
-    except Exception:
-        return "Рынок нестабилен; любой вход в новые пары сопряжён с риском полной потери депозита."
+    _ = score
+    return "Сигнал снайпера валиден только при строгом риск-менеджменте и проверке контракта. Размер позиции держи минимальным."
 
 
 def _format_signal(token: dict[str, Any], security: dict[str, Any], ai_text: str, score: int) -> str:
     chain = str(token.get("chain") or "")
-    chain_ru = "Ethereum" if chain == "ethereum" else "Solana"
-    dex_slug = "ethereum" if chain == "ethereum" else "solana"
+    chain_ru = {"ethereum": "Ethereum", "bsc": "BSC", "base": "Base", "arbitrum": "Arbitrum", "polygon": "Polygon", "solana": "Solana"}.get(chain, chain)
+    dex_slug = chain
     contract = str(token.get("contract") or "")
     dex_link = f"https://dexscreener.com/{dex_slug}/{contract}"
 
@@ -155,9 +115,8 @@ def _format_signal(token: dict[str, Any], security: dict[str, Any], ai_text: str
 
     buy_tax = _safe_float(security.get("buy_tax"))
     sell_tax = _safe_float(security.get("sell_tax"))
-    honeypot_ok = not bool(security.get("is_honeypot"))
-    honeypot_line = "✅ НЕТ" if honeypot_ok else "🚨 ДА"
-    lp_ok = bool(security.get("lp_locked"))
+    honeypot_line = "✅ НЕТ" if not token.get("is_honeypot") else "🚨 ДА"
+    lp_ok = bool(token.get("lp_locked"))
     lp_line = "заблокирована ✅" if lp_ok else "не подтверждена ⚠️"
 
     e1, e2, sl, t2, t5, t10 = _entry_levels(price)
@@ -175,9 +134,10 @@ def _format_signal(token: dict[str, Any], security: dict[str, Any], ai_text: str
         f"🔗 [DexScreener]({dex_link})\n\n"
         f"🛡️ Безопасность:\n"
         f"└ Налог: {buy_tax:.1f}% / {sell_tax:.1f}%\n"
-        f"└ Холдеров: {_safe_int(security.get('holder_count'))}\n"
+        f"└ Холдеров: {int(token.get('holders', 0))}\n"
         f"└ Honeypot: {honeypot_line}\n"
         f"└ LP: {lp_line}\n\n"
+        f"⚠️ Scam Risk: {token.get('risk_score', 0)}/100\n"
         f"🤖 AI: {ai_text}\n\n"
         f"🎯 Точки входа:\n"
         f"└ Вход 1: {_fmt_usd(e1)} (30% позиции)\n"
@@ -199,8 +159,7 @@ async def scanner_loop(bot: Any) -> None:
         _reset_counters_daily()
         SCANNER_STATE["last_scan_time"] = datetime.now(timezone.utc).isoformat()
         try:
-            raw = await scanner.fetch_sources_sequential()
-            candidates = scanner.prefilter_memecoins(raw, seen_tokens)
+            candidates = await scanner.scan_new_tokens(max_age_hours=0.5)
             for token in candidates:
                 uid = token_uid(token["chain"], token["contract"])
                 if uid in seen_tokens:
@@ -209,24 +168,21 @@ async def scanner_loop(bot: Any) -> None:
                 save_seen_tokens(seen_tokens)
                 SCANNER_STATE["tokens_scanned_today"] += 1
 
-                chain_id = "1" if token["chain"] == "ethereum" else "solana"
-                try:
-                    security = await checker.check_contract_security(token["contract"], chain_id)
-                except Exception as exc:
-                    logger.error("GoPlus %s: %s", uid, exc)
+                if token.get("is_honeypot"):
+                    continue
+                if _safe_float(token.get("sell_tax")) != 0.0 or _safe_float(token.get("buy_tax")) != 0.0:
+                    continue
+                if not token.get("lp_locked"):
+                    continue
+                if not token.get("is_renounced"):
                     continue
 
-                if security.get("is_honeypot"):
-                    continue
-                if _safe_float(security.get("sell_tax")) >= 10.0:
-                    continue
-
-                score = calculate_x1000_score(token, security)
+                score = calculate_x1000_score(token, token)
                 if score < 50:
                     continue
 
                 ai_text = await _ai_text_ru(token, score)
-                message = _format_signal(token, security, ai_text, score)
+                message = _format_signal(token, token, ai_text, score)
                 users = load_users()
                 sent_any = False
                 for user_id in users:
@@ -247,5 +203,5 @@ async def scanner_loop(bot: Any) -> None:
                 await asyncio.sleep(1.5)
         except Exception as exc:
             SCANNER_STATE["last_error"] = str(exc)
-            logger.error("Ошибка scanner_loop: %s", exc)
-        await asyncio.sleep(120)
+            logger.exception("Ошибка scanner_loop: %s", exc)
+        await asyncio.sleep(180)

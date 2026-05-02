@@ -1,122 +1,89 @@
-"""
-alerts.py — Система алертов
-Хранит алерты пользователей в памяти и проверяет их по расписанию.
-Для продакшена замени на Redis или SQLite.
-"""
+from __future__ import annotations
 
-import aiohttp
-import os
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
-if TYPE_CHECKING:
-    from analysis import CryptoAnalyzer
 
-COINGECKO = "https://api.coingecko.com/api/v3"
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
+@dataclass
+class Alert:
+    type: str
+    symbol: str
+    condition: str
+    value: float
+    created_at: str
 
 
 class AlertManager:
-    def __init__(self):
-        # {user_id: [{"symbol": str, "price": float, "direction": str}]}
-        self._alerts: dict[int, list] = {}
+    def __init__(self) -> None:
+        self._alerts: dict[int, list[Alert]] = {}
+        self._history: list[dict[str, Any]] = []
+        self._dedupe: set[str] = set()
 
-    def add_alert(self, user_id: int, symbol: str, price: float, direction: str = "above"):
-        if user_id not in self._alerts:
-            self._alerts[user_id] = []
-        self._alerts[user_id].append({
-            "symbol": symbol.upper(),
-            "price": price,
-            "direction": direction
-        })
+    def add_price_alert(self, user_id: int, symbol: str, price: float, direction: str = "above") -> None:
+        self._alerts.setdefault(user_id, []).append(
+            Alert(type="price", symbol=symbol.upper(), condition=direction, value=float(price), created_at=datetime.now(timezone.utc).isoformat())
+        )
+
+    def add_volume_alert(self, user_id: int, symbol: str, min_volume_1h: float) -> None:
+        self._alerts.setdefault(user_id, []).append(
+            Alert(type="volume", symbol=symbol.upper(), condition="gte", value=float(min_volume_1h), created_at=datetime.now(timezone.utc).isoformat())
+        )
+
+    def add_listing_alert(self, user_id: int, chain: str, max_age_minutes: int = 30) -> None:
+        self._alerts.setdefault(user_id, []).append(
+            Alert(type="listing", symbol=chain.lower(), condition="age_lte", value=float(max_age_minutes), created_at=datetime.now(timezone.utc).isoformat())
+        )
+
+    def get_user_alerts(self, user_id: int) -> list[dict[str, Any]]:
+        return [a.__dict__.copy() for a in self._alerts.get(user_id, [])]
 
     def remove_alert(self, user_id: int, idx: int) -> bool:
-        alerts = self._alerts.get(user_id, [])
-        if 0 <= idx < len(alerts):
-            alerts.pop(idx)
+        arr = self._alerts.get(user_id, [])
+        if 0 <= idx < len(arr):
+            arr.pop(idx)
             return True
         return False
 
-    def get_user_alerts(self, user_id: int) -> list:
-        return self._alerts.get(user_id, [])
+    def history(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self._history[-limit:]
 
-    async def check_alerts(self, analyzer: "CryptoAnalyzer") -> list[tuple]:
-        """
-        Проверяет все алерты. Возвращает список (user_id, message) для сработавших.
-        Срабатавшие алерты удаляются.
-        """
-        if not self._alerts:
-            return []
+    def _push_history(self, user_id: int, key: str, message: str) -> None:
+        self._history.append({"ts": datetime.now(timezone.utc).isoformat(), "user_id": user_id, "key": key, "message": message})
+        self._dedupe.add(key)
 
-        # Собираем уникальные символы
-        symbols = set()
-        for alerts in self._alerts.values():
-            for a in alerts:
-                symbols.add(a["symbol"])
-
-        # Получаем текущие цены
-        prices = await self._fetch_prices(list(symbols), analyzer)
-        if not prices:
-            return []
-
-        triggered = []
+    def evaluate(self, market_rows: list[dict[str, Any]]) -> list[tuple[int, str]]:
+        triggered: list[tuple[int, str]] = []
+        by_symbol: dict[str, dict[str, Any]] = {str(x.get("symbol", "")).upper(): x for x in market_rows}
         for user_id, alerts in list(self._alerts.items()):
-            remaining = []
+            next_alerts: list[Alert] = []
             for a in alerts:
-                current = prices.get(a["symbol"])
-                if current is None:
-                    remaining.append(a)
+                msg: str | None = None
+                dedupe_key = f"{user_id}:{a.type}:{a.symbol}:{a.condition}:{a.value}"
+                if dedupe_key in self._dedupe:
                     continue
-                fired = (
-                    (a["direction"] == "above" and current >= a["price"]) or
-                    (a["direction"] == "below" and current <= a["price"])
-                )
-                if fired:
-                    dir_sym = "≥" if a["direction"] == "above" else "≤"
-                    msg = (
-                        f"🔔 *Алерт сработал!*\n\n"
-                        f"*{a['symbol']}* достиг ${current:,.4f}\n"
-                        f"Условие: {dir_sym} ${a['price']:,.4f}\n\n"
-                        f"_/analyze {a['symbol']} — посмотреть сигнал_"
-                    )
+
+                if a.type == "price":
+                    row = by_symbol.get(a.symbol)
+                    if row:
+                        price = float(row.get("price", 0))
+                        if (a.condition == "above" and price >= a.value) or (a.condition == "below" and price <= a.value):
+                            sign = "≥" if a.condition == "above" else "≤"
+                            msg = f"🔔 Price Alert\n{a.symbol}: ${price:,.6f}\nУсловие: {sign} ${a.value:,.6f}"
+                elif a.type == "volume":
+                    row = by_symbol.get(a.symbol)
+                    if row and float(row.get("volume_1h", 0)) >= a.value:
+                        msg = f"🔔 Volume Alert\n{a.symbol}: 1h volume ${float(row.get('volume_1h', 0)):,.0f}"
+                elif a.type == "listing":
+                    chain = a.symbol.lower()
+                    fresh = [x for x in market_rows if str(x.get("chain", "")).lower() == chain and float(x.get("age_hours", 999)) * 60 <= a.value]
+                    if fresh:
+                        msg = f"🆕 Listing Alert\nСеть {chain.upper()}: найдено {len(fresh)} новых токенов <= {int(a.value)} мин."
+
+                if msg:
+                    self._push_history(user_id, dedupe_key, msg)
                     triggered.append((user_id, msg))
                 else:
-                    remaining.append(a)
-            self._alerts[user_id] = remaining
-
+                    next_alerts.append(a)
+            self._alerts[user_id] = next_alerts
         return triggered
-
-    async def _fetch_prices(self, symbols: list[str], analyzer: "CryptoAnalyzer") -> dict:
-        """Получить текущие цены по символам через CoinGecko"""
-        from analysis import SYMBOL_MAP
-
-        prices = {}
-        snapshot = await analyzer._get_market_snapshot(250)
-        for coin in snapshot:
-            if coin.get("symbol") in symbols:
-                prices[coin["symbol"]] = coin["price"]
-
-        missing = [symbol for symbol in symbols if symbol not in prices]
-        if not missing:
-            return prices
-
-        ids = [SYMBOL_MAP.get(s, s.lower()) for s in missing]
-        ids_str = ",".join(ids)
-        headers = {"User-Agent": "CryptoSignalBot/1.1"}
-        if COINGECKO_API_KEY:
-            headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
-        try:
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(
-                    f"{COINGECKO}/simple/price",
-                    params={"ids": ids_str, "vs_currencies": "usd"},
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as r:
-                    if r.status != 200:
-                        return prices
-                    data = await r.json()
-                    for sym, coin_id in zip(missing, ids):
-                        if coin_id in data:
-                            prices[sym] = data[coin_id]["usd"]
-                    return prices
-        except Exception:
-            return prices

@@ -1,195 +1,158 @@
-"""
-contract_checker.py
-Проверка безопасности контрактов через GoPlus (бесплатный API).
-"""
-
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
-
 GOPLUS_API = "https://api.gopluslabs.io/api/v1"
+CHAIN_MAP = {"eth": "1", "bsc": "56", "base": "8453", "arbitrum": "42161", "polygon": "137", "solana": "solana"}
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _f(v: Any, d: float = 0.0) -> float:
     try:
-        if value is None:
-            return default
-        return float(value)
+        return float(v)
     except (TypeError, ValueError):
-        return default
+        return d
 
 
-def _safe_int(value: Any, default: int = 0) -> int:
+def _i(v: Any, d: int = 0) -> int:
     try:
-        if value is None:
-            return default
-        return int(float(value))
+        return int(float(v))
     except (TypeError, ValueError):
-        return default
+        return d
 
 
-def _safe_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes"}
-
-
-def _calc_safety(result: dict[str, Any]) -> dict[str, Any]:
-    safety_score = 100
-    red_flags: list[str] = []
-    yellow_flags: list[str] = []
-
-    if result["is_honeypot"]:
-        safety_score -= 100
-        red_flags.append("🚨 HONEYPOT — продать невозможно!")
-    if result["sell_tax"] > 10:
-        safety_score -= 30
-        red_flags.append(f"🚨 Налог продажи {result['sell_tax']}%")
-    elif result["sell_tax"] > 5:
-        safety_score -= 15
-        yellow_flags.append(f"⚠️ Налог продажи {result['sell_tax']}%")
-    if result["buy_tax"] > 10:
-        safety_score -= 20
-        yellow_flags.append(f"⚠️ Налог покупки {result['buy_tax']}%")
-    if result["is_mintable"]:
-        safety_score -= 20
-        yellow_flags.append("⚠️ Можно минтить новые токены")
-    if result["owner_percent"] > 50:
-        safety_score -= 25
-        red_flags.append(f"🚨 Девелопер держит {result['owner_percent']}% токенов")
-    elif result["owner_percent"] > 20:
-        safety_score -= 10
-        yellow_flags.append(f"⚠️ Девелопер держит {result['owner_percent']}% токенов")
-    if not result["lp_locked"]:
-        safety_score -= 15
-        yellow_flags.append("⚠️ Ликвидность не заблокирована")
-    if result["holder_count"] < 50:
-        safety_score -= 10
-        yellow_flags.append(f"⚠️ Мало холдеров: {result['holder_count']}")
-    if result["is_blacklisted"]:
-        safety_score -= 20
-        red_flags.append("🚨 Обнаружены blacklist-функции")
-    if result["is_proxy"]:
-        safety_score -= 8
-        yellow_flags.append("⚠️ Прокси-контракт (можно изменить логику)")
-    if not result["is_open_source"]:
-        safety_score -= 10
-        yellow_flags.append("⚠️ Контракт не верифицирован")
-
-    safety_score = max(0, min(100, safety_score))
-    if safety_score >= 80:
-        verdict = "✅ БЕЗОПАСНО"
-    elif safety_score >= 60:
-        verdict = "🟡 ОСТОРОЖНО"
-    elif safety_score >= 40:
-        verdict = "🟠 ВЫСОКИЙ РИСК"
-    else:
-        verdict = "🔴 ОПАСНО / СКАМ"
-
-    return {
-        "safety_score": safety_score,
-        "verdict": verdict,
-        "red_flags": red_flags,
-        "yellow_flags": yellow_flags,
-    }
+def _b(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in {"1", "true", "yes"}
 
 
 class ContractSecurityChecker:
-    async def _get_json(self, url: str) -> dict[str, Any] | None:
-        try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        logger.warning("GoPlus HTTP %s: %s", response.status, url)
-                        return None
-                    return await response.json()
-        except Exception as exc:
-            logger.error("Ошибка GoPlus запроса: %s", exc)
-            return None
+    async def _get_json(self, url: str) -> dict[str, Any]:
+        timeout = aiohttp.ClientTimeout(total=20)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as resp:
+                        if resp.status >= 400:
+                            raise RuntimeError(f"GoPlus HTTP {resp.status}")
+                        return await resp.json(content_type=None)
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(0.7 + attempt)
+        raise RuntimeError(f"GoPlus unavailable: {last_error}")
 
-    def _normalize_goplus_payload(self, payload: dict[str, Any], contract: str) -> dict[str, Any]:
-        result_block = payload.get("result") or {}
-        if isinstance(result_block, list):
-            token_data = result_block[0] if result_block else {}
-        elif isinstance(result_block, dict):
-            token_data = result_block.get(contract.lower()) or result_block.get(contract) or {}
-            if not token_data and result_block:
-                token_data = next(iter(result_block.values()), {})
+    def _normalize(self, payload: dict[str, Any], contract: str) -> dict[str, Any]:
+        block = payload.get("result") or {}
+        if isinstance(block, dict):
+            item = block.get(contract.lower()) or block.get(contract) or next(iter(block.values()), {})
+        elif isinstance(block, list):
+            item = block[0] if block else {}
         else:
-            token_data = {}
+            item = {}
 
-        owner_percent = _safe_float(
-            token_data.get("owner_percent")
-            or token_data.get("creator_percent")
-            or token_data.get("creator_address_percent")
-        ) * 100
-        lp_lock_percent = _safe_float(
-            token_data.get("lp_locked_total")
-            or token_data.get("lp_lock_percent")
-            or token_data.get("locked_lp_percent")
-        ) * (100 if _safe_float(token_data.get("lp_locked_total")) <= 1 else 1)
-        holder_count = _safe_int(token_data.get("holder_count") or token_data.get("holders"))
-        buy_tax = _safe_float(token_data.get("buy_tax"))
-        sell_tax = _safe_float(token_data.get("sell_tax"))
+        buy_tax = _f(item.get("buy_tax"), -1)
+        sell_tax = _f(item.get("sell_tax"), -1)
+        owner_address = str(item.get("owner_address") or "")
+        is_renounced = _b(item.get("is_renounced")) or owner_address in {"", "0x0000000000000000000000000000000000000000"}
+        lp_locked_pct = _f(item.get("lp_locked_total") or item.get("locked_lp_percent") or item.get("lp_lock_percent"))
+        if lp_locked_pct <= 1:
+            lp_locked_pct *= 100
 
-        normalized = {
-            "is_honeypot": _safe_bool(token_data.get("is_honeypot")),
-            "buy_tax": round(buy_tax, 2),
-            "sell_tax": round(sell_tax, 2),
-            "is_mintable": _safe_bool(token_data.get("is_mintable")),
-            "is_proxy": _safe_bool(token_data.get("is_proxy")),
-            "owner_percent": round(owner_percent, 2),
-            "holder_count": holder_count,
-            "is_blacklisted": _safe_bool(token_data.get("is_blacklisted")),
-            "lp_locked": lp_lock_percent > 0.0 or _safe_bool(token_data.get("is_locked")),
-            "lp_lock_percent": round(lp_lock_percent, 2),
-            "creator_address": str(token_data.get("creator_address") or ""),
-            "is_open_source": _safe_bool(token_data.get("is_open_source")) or _safe_bool(token_data.get("is_verified")),
+        return {
+            "is_honeypot": _b(item.get("is_honeypot")),
+            "buy_tax": None if buy_tax < 0 else round(buy_tax, 2),
+            "sell_tax": None if sell_tax < 0 else round(sell_tax, 2),
+            "is_mintable": _b(item.get("is_mintable")),
+            "is_blacklisted": _b(item.get("is_blacklisted")),
+            "is_open_source": _b(item.get("is_open_source")) or _b(item.get("is_verified")),
+            "is_proxy": _b(item.get("is_proxy")),
+            "is_renounced": is_renounced,
+            "owner_address": owner_address,
+            "owner_percent": round(_f(item.get("owner_percent")) * 100, 2),
+            "holder_count": _i(item.get("holder_count")),
+            "lp_locked": lp_locked_pct > 0 or _b(item.get("is_locked")),
+            "lp_lock_percent": round(lp_locked_pct, 2),
         }
-        return normalized
 
-    async def check_contract_security(self, contract_address: str, chain_id: str) -> dict[str, Any]:
+    def _score(self, r: dict[str, Any]) -> dict[str, Any]:
+        score = 100
+        flags: list[str] = []
+        if r["is_honeypot"]:
+            score -= 60
+            flags.append("Honeypot")
+        if r["is_mintable"]:
+            score -= 15
+            flags.append("Mint active")
+        if r["is_blacklisted"]:
+            score -= 15
+            flags.append("Blacklist")
+        if r["buy_tax"] is not None and r["buy_tax"] > 10:
+            score -= 10
+            flags.append("Buy tax > 10%")
+        if r["sell_tax"] is not None and r["sell_tax"] > 10:
+            score -= 15
+            flags.append("Sell tax > 10%")
+        if not r["lp_locked"]:
+            score -= 10
+            flags.append("LP unlocked")
+        if not r["is_open_source"]:
+            score -= 10
+            flags.append("Unverified contract")
+        if r["holder_count"] and r["holder_count"] < 100:
+            score -= 10
+            flags.append("Holders < 100")
+        score = max(0, min(100, score))
+        verdict = "SAFE" if score >= 75 else "CAUTION" if score >= 50 else "RISK"
+        return {"risk_score": 100 - score, "safety_score": score, "verdict": verdict, "flags": flags}
+
+    async def check_contract_security(self, contract_address: str, chain: str) -> dict[str, Any]:
         try:
-            if chain_id == "solana":
+            chain_key = CHAIN_MAP.get(chain, chain)
+            if chain_key == "solana":
                 url = f"{GOPLUS_API}/solana/token_security?contract_addresses={contract_address}"
             else:
-                url = f"{GOPLUS_API}/token_security/{chain_id}?contract_addresses={contract_address}"
-
-            payload = await self._get_json(url)
-            if not payload:
-                raise RuntimeError("Пустой ответ GoPlus")
-
-            result = self._normalize_goplus_payload(payload, contract_address)
-            safety = _calc_safety(result)
-            return {**result, **safety}
+                url = f"{GOPLUS_API}/token_security/{chain_key}?contract_addresses={contract_address}"
+            raw = await self._get_json(url)
+            normalized = self._normalize(raw, contract_address)
+            return {**normalized, **self._score(normalized)}
         except Exception as exc:
-            logger.error("Ошибка проверки контракта %s: %s", contract_address, exc)
+            logger.error("contract check error %s %s: %s", chain, contract_address, exc)
             fallback = {
                 "is_honeypot": False,
-                "buy_tax": 0.0,
-                "sell_tax": 0.0,
+                "buy_tax": None,
+                "sell_tax": None,
                 "is_mintable": False,
+                "is_blacklisted": False,
+                "is_open_source": False,
                 "is_proxy": False,
+                "is_renounced": False,
+                "owner_address": "",
                 "owner_percent": 0.0,
                 "holder_count": 0,
-                "is_blacklisted": False,
                 "lp_locked": False,
                 "lp_lock_percent": 0.0,
-                "creator_address": "",
-                "is_open_source": True,
             }
-            return {
-                **fallback,
-                "safety_score": 35,
-                "verdict": "🟠 ВЫСОКИЙ РИСК",
-                "red_flags": [],
-                "yellow_flags": ["⚠️ Не удалось получить полный отчёт безопасности"],
-            }
+            return {**fallback, "risk_score": 70, "safety_score": 30, "verdict": "RISK", "flags": ["Security API unavailable"]}
+
+    async def check_and_format_report(self, contract_address: str, chain: str) -> str:
+        r = await self.check_contract_security(contract_address, chain)
+        return (
+            f"🔍 Проверка контракта\n"
+            f"Сеть: {chain.upper()}\n"
+            f"Контракт: `{contract_address}`\n"
+            f"Вердикт: {r['verdict']} | Риск: {r['risk_score']}/100\n"
+            f"Honeypot: {'Да' if r['is_honeypot'] else 'Нет'}\n"
+            f"Mint: {'Активен' if r['is_mintable'] else 'Отключен'}\n"
+            f"Blacklist: {'Есть' if r['is_blacklisted'] else 'Нет'}\n"
+            f"Налоги: {r['buy_tax'] if r['buy_tax'] is not None else 'N/A'}% / {r['sell_tax'] if r['sell_tax'] is not None else 'N/A'}%\n"
+            f"Renounced: {'Да' if r['is_renounced'] else 'Нет'}\n"
+            f"Ликвидность: {'Заблокирована' if r['lp_locked'] else 'Не заблокирована'}\n"
+            f"Холдеры: {r['holder_count']}\n"
+            f"Флаги: {', '.join(r['flags']) if r['flags'] else 'Нет'}"
+        )
