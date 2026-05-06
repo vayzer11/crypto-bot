@@ -11,6 +11,7 @@ from typing import Any
 from analysis import CryptoAnalyzer
 from contract_checker import ContractSecurityChecker
 from scanner import MultiChainScanner, calculate_x1000_score, load_seen_tokens, save_seen_tokens, token_uid
+from social_scanner import SocialScanner
 
 logger = logging.getLogger(__name__)
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
@@ -18,6 +19,7 @@ USERS_FILE = Path(__file__).resolve().parent / "users.json"
 scanner = MultiChainScanner()
 checker = ContractSecurityChecker()
 ai_analyzer = CryptoAnalyzer()
+social_scanner = SocialScanner()
 
 SCANNER_STATE: dict[str, Any] = {
     "running": False,
@@ -49,6 +51,8 @@ CHAIN_LABEL_RU = {
 
 _last_scam_broadcast: float | None = None
 SCAM_ALERT_INTERVAL_SEC = 2 * 3600
+_last_social_broadcast: float | None = None
+SOCIAL_ALERT_INTERVAL_SEC = 4 * 3600
 
 
 def load_users() -> set[int]:
@@ -161,14 +165,14 @@ async def _format_signal(token: dict[str, Any], sec: dict[str, Any], score: int)
         f"└ LP: {lp_line}\n\n"
         f"🤖 AI: {ai_txt}\n\n"
         f"🎯 Точки входа:\n"
-        f"└ Вход 1: {_fmt_usd(entry1)} (30% позиции) — Fib 0.5\n"
-        f"└ Вход 2: {_fmt_usd(entry2)} (70% позиции) — Fib 0.618\n"
+        f"└ Вход 1: {_fmt_usd(entry1)} (30%) — Fib 0.500\n"
+        f"└ Вход 2: {_fmt_usd(entry2)} (70%) — Fib 0.618\n"
         f"└ Стоп: {_fmt_usd(stop)} (-15%)\n\n"
         f"🎯 Цели:\n"
         f"└ x2: {_fmt_usd(tp2)}\n"
         f"└ x5: {_fmt_usd(tp5)}\n"
         f"└ x10: {_fmt_usd(tp10)}\n\n"
-        f"⚠️ Риск: ВЫСОКИЙ. DYOR."
+        f"⚠️ Риск: ВЫСОКИЙ. DYOR.\n\n---"
     )
 
 
@@ -196,6 +200,36 @@ async def _maybe_broadcast_scam(bot: Any) -> None:
         logger.exception("scam broadcast error: %s", exc)
 
 
+async def _maybe_broadcast_social(bot: Any) -> None:
+    global _last_social_broadcast
+    now = time.time()
+    if _last_social_broadcast is None:
+        _last_social_broadcast = now
+        return
+    if now - _last_social_broadcast < SOCIAL_ALERT_INTERVAL_SEC:
+        return
+    _last_social_broadcast = now
+    try:
+        gems = await social_scanner.find_social_gems_data()
+        top = [g for g in gems if g.get("social_score", 0) >= 70][:3]
+        if not top:
+            return
+        lines = ["📡 *АВТО-СКАНЕР: Найдены социальные сигналы!*", ""]
+        for g in top:
+            lines.append(
+                f"• {g.get('symbol')} — Score {g.get('social_score')}, {g.get('potential', 'потенциал')}, "
+                f"Reddit: {g.get('reddit_mentions', 0)}"
+            )
+        alert = "\n".join(lines)
+        for uid in load_users():
+            try:
+                await bot.send_message(uid, alert, parse_mode="Markdown", disable_web_page_preview=True)
+            except Exception as exc:
+                logger.warning("social broadcast failed %s: %s", uid, exc)
+    except Exception as exc:
+        logger.exception("social broadcast error: %s", exc)
+
+
 async def scanner_loop(bot: Any) -> None:
     SCANNER_STATE["running"] = True
     seen = load_seen_tokens()
@@ -203,6 +237,7 @@ async def scanner_loop(bot: Any) -> None:
         SCANNER_STATE["last_scan_time"] = datetime.now(timezone.utc).isoformat()
         try:
             await _maybe_broadcast_scam(bot)
+            await _maybe_broadcast_social(bot)
 
             tokens = await scanner.scan_new_tokens(max_age_hours=1.0)
             for token in tokens:
@@ -216,10 +251,11 @@ async def scanner_loop(bot: Any) -> None:
                 ck = CHAIN_CHECK.get(str(token.get("chain", "")).lower(), "eth")
                 sec = await checker.check_contract_security(token["contract"], ck)
 
-                if sec.get("is_honeypot"):
+                # Requested filter: score >= 40 AND NOT honeypot AND sell_tax < 10%
+                if sec.get("is_honeypot") is True:
                     continue
                 st = sec.get("sell_tax")
-                if st is not None and float(st) >= 10:
+                if st is None or float(st) >= 10:
                     continue
 
                 score = calculate_x1000_score(token, sec)

@@ -16,6 +16,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
+from social_scanner import SocialScanner
 from sniper import scanner_loop
 
 load_dotenv()
@@ -30,6 +31,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 MORALIS_API_KEY = os.getenv("MORALIS_API_KEY", "").strip()
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
 analyzer = CryptoAnalyzer()
+social_scanner = SocialScanner()
 
 SUPPORTED_CHAINS = {
     "ethereum": {"name": "Ethereum", "goplus": "1"},
@@ -358,6 +360,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎯 Снайпер", callback_data="scan:snipe"),
         ],
         [
+            InlineKeyboardButton(text="📡 Соц. сканер", callback_data="menu_social"),
             InlineKeyboardButton(text="🚨 Скам-детектор", callback_data="menu_scam_hunter"),
         ],
         [
@@ -479,6 +482,18 @@ async def cb_scam_hunter(query: CallbackQuery) -> None:
     except Exception as e:
         await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
+
+@dp.callback_query(F.data == "menu_social")
+async def cb_social(query: CallbackQuery) -> None:
+    await query.answer("Сканирую соцсети...")
+    save_user_id(query.from_user.id)
+    msg = await query.message.answer("🔍 Анализирую Reddit, CoinGecko, DexScreener...")
+    try:
+        result = await social_scanner.find_social_gems()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
 @dp.callback_query(F.data == "help:check")
 async def cb_help_check(query: CallbackQuery) -> None:
     await query.answer()
@@ -566,6 +581,17 @@ async def scam_command(message: Message) -> None:
         await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
 
+@dp.message(Command("social"))
+async def social_command(message: Message) -> None:
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🔍 Сканирую соцсети...")
+    try:
+        result = await social_scanner.find_social_gems()
+        await msg.edit_text(result, parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
 @dp.message(Command("analyze"))
 async def cmd_analyze(message: Message) -> None:
     save_user_id(message.from_user.id)
@@ -606,6 +632,69 @@ async def cmd_check(message: Message) -> None:
         await msg.edit_text(format_token(tok), parse_mode="Markdown", disable_web_page_preview=True)
 
 
+async def auto_broadcast_loop(bot: Bot) -> None:
+    while True:
+        try:
+            users = sorted(load_users())
+            if not users:
+                await asyncio.sleep(3600)
+                continue
+
+            top_signals = await do_scan("safe")
+            top_buy = sorted(top_signals, key=lambda x: x.volume_1h, reverse=True)[:3]
+            social = await social_scanner.find_social_gems_data()
+            top_social = social[:2]
+            scams = await analyzer.find_scam_whales_results()
+            top_scam = scams[:1]
+
+            lines = [
+                f"🔔 *АВТО-СКАНЕР* — {time.strftime('%H:%M:%S')}",
+                "",
+                "🟢 *ТОП СИГНАЛЫ НА ПОКУПКУ:*",
+            ]
+            if top_buy:
+                for idx, t in enumerate(top_buy, start=1):
+                    entry = t.market_cap / max(t.holders or 1000, 1) if t.market_cap > 0 else t.liquidity / 1000
+                    stop = entry * 0.93
+                    target = entry * 1.2
+                    lines.append(
+                        f"{idx}. {t.symbol} — RSI 30 | Вход ${entry:.4f} | Стоп ${stop:.4f} | Цель ${target:.4f}"
+                    )
+            else:
+                lines.append("1. Сейчас нет уверенных BUY-сигналов")
+
+            lines.extend(["", "📡 *СОЦИАЛЬНЫЕ ГЕМЫ:*"])
+            if top_social:
+                for g in top_social:
+                    lines.append(
+                        f"- {g.get('symbol')} — Score {g.get('social_score')}, {g.get('potential')}, "
+                        f"{g.get('reddit_mentions', 0)} упоминаний Reddit"
+                    )
+            else:
+                lines.append("- Нет сильных соцсигналов прямо сейчас")
+
+            lines.extend(["", "🚨 *СКАМ ПРЕДУПРЕЖДЕНИЕ:*"])
+            if top_scam:
+                s = top_scam[0]
+                lines.append(
+                    f"- {s.get('symbol')} — Риск {s.get('risk')}%, памп {s.get('ch7', 0):+.0f}% за 7д, "
+                    f"теперь дамп {s.get('ch24', 0):+.1f}%"
+                )
+            else:
+                lines.append("- Явных манипуляций в текущем срезе не найдено")
+            lines.extend(["", "📱 Подробный анализ: напиши символ монеты"])
+
+            msg = "\n".join(lines)
+            for uid in users:
+                try:
+                    await bot.send_message(uid, msg, parse_mode="Markdown", disable_web_page_preview=True)
+                except Exception:
+                    logger.warning("broadcast failed for %s", uid)
+        except Exception as e:
+            logger.exception("auto broadcast loop failed: %s", e)
+        await asyncio.sleep(6 * 3600)
+
+
 # ═══ MAIN ════════════════════════════════════════════════════════
 
 async def main() -> None:
@@ -615,6 +704,7 @@ async def main() -> None:
     await screener.start()
     bot = Bot(token=BOT_TOKEN)
     asyncio.create_task(scanner_loop(bot))
+    asyncio.create_task(auto_broadcast_loop(bot))
     logger.info("Bot started!")
     try:
         await dp.start_polling(bot)
@@ -622,6 +712,7 @@ async def main() -> None:
         if screener.session:
             await screener.session.close()
         await analyzer.close()
+        await social_scanner.close()
 
 
 if __name__ == "__main__":

@@ -188,10 +188,12 @@ class MultiChainScanner:
         for q in SEARCH_QUERIES:
             try:
                 rows.extend(await self._query_search(q))
+                await asyncio.sleep(2)
             except Exception as exc:
                 logger.warning("search query failed: %s %s", q, exc)
         try:
             rows.extend(await self._query_trending())
+            await asyncio.sleep(2)
         except Exception as exc:
             logger.warning("trending query failed: %s", exc)
 

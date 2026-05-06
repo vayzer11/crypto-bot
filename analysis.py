@@ -14,169 +14,77 @@ try:
 except Exception:
     _SYMBOL_BASE = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
 
-# Дополнение к карте: мемы, AI, DeFi, L2, экосистемы (CoinGecko id)
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+# Базовые алиасы + requested sectors. Остальная большая карта уже в _symbol_map_generated.py.
 SYMBOL_MAP_EXTRA: dict[str, str] = {
-    "LADYS": "milady-meme-coin",
-    "WOJAK": "wojak-2",
-    "CHAD": "chad-coin",
-    "BILLY": "billy-2",
-    "SLERF": "slerf",
-    "ZERO": "zerolend",
-    "GIGA": "giga-2",
-    "PONKE": "ponke-sol",
-    "MYRO": "myro-2",
-    "SILLY": "silly-dragon",
-    "RETARDIO": "retardio",
-    "MICHI": "michi-2",
-    "BOOK": "book-of-crypto",
-    "SIGMA": "sigma-3",
-    "MANEKI": "maneki",
-    "PORK": "pork-2",
-    "CHILLGUY": "chill-guy",
-    "FWOG": "fwog",
-    "GORK": "gork",
-    "GOAT": "goatseus-maximus",
-    "ACT": "act-i-the-ai-prophecy",
-    "BANANA": "banana-gun",
-    "CTXC": "cortex",
-    "OLAS": "autonolas",
-    "COVALENT": "covalent",
-    "RDNT": "radiant-capital",
-    "VELA": "vela-token",
-    "LISTA": "lista-dao",
-    "USUAL": "usual",
-    "MKUSD": "prisma-mkusd",
-    "MATIC": "polygon-ecosystem-token",
-    "BOBA": "boba-network",
-    "METIS": "metis-token",
-    "SCROLL": "scroll",
-    "TAIKO": "taiko",
-    "MODE": "mode",
-    "KROMA": "kroma",
-    "STEP": "step-finance",
-    "COPE": "cope",
-    "MEDIA": "media-network",
-    "HONEY": "hivemapper",
-    "TULIP": "tulip-protocol",
-    "PORT": "port-finance",
-    "LARIX": "larix",
-    "PIXEL": "pixels",
-    "PORTAL": "portal-2",
-    "MAVIA": "heroes-of-mavia",
-    "SAGA": "saga-2",
-    "NAKA": "nakamoto-games",
-    "HERO": "hero-blaze-three-kingdoms",
-    "PVU": "plant-vs-undead",
-    "DREAMS": "dreams-quest",
-    "DOGS": "dogs-2",
-    "HMSTR": "hamster-kombat",
-    "CATI": "catizen",
-    "MAJOR": "major",
-    "BLUM": "blum-2",
-    "GRAM": "gram-2",
-    "DUREV": "durov",
-    "RESISTANCE": "resistance-dog",
-    "AEVO": "aevo",
-    "WEN": "wen-4",
-    "JITO": "jito-governance-token",
-    "DRIFT": "drift-protocol",
-    "MARGINFI": "marginfi",
-    "DIA": "dia-data",
-    "NEST": "nest",
-    "FLUX": "zelcash",
-    "POWR": "power-ledger",
-    "POWER": "power-2",
-    "LUSD": "liquity-usd",
-    "AGIX": "singularitynet",
-    "OCEAN": "ocean-protocol",
-    "SUSHI": "sushi",
-    "1INCH": "1inch",
-    "GNS": "gains-network",
-    "YFI": "yearn-finance",
-    "COMP": "compound-governance-token",
-    "MKR": "maker",
-    "UNI": "uniswap",
-    "AAVE": "aave",
-    "CRV": "curve-dao-token",
-    "SNX": "havven",
-    "IMX": "immutable-x",
-    "ARB": "arbitrum",
-    "OP": "optimism",
-    "STRK": "starknet",
-    "MANTA": "manta-network",
-    "ZKSYNC": "zksync",
-    "BLAST": "blast",
-    "LINEA": "linea",
-    "BEAM": "beam-2",
-    "RON": "ronin",
-    "MAGIC": "magic",
-    "YGG": "yield-guild-games",
-    "NOT": "notcoin",
-    "REZ": "renzo",
-    "OMNI": "omni-network",
-    "SAFE": "safe",
-    "ETHFI": "ether-fi",
-    "EIGEN": "eigenlayer",
-    "ONDO": "ondo-finance",
-    "ZRO": "layerzero",
-    "COW": "cow-protocol",
-    "FLUID": "instadapp",
-    "FRAX": "frax",
-    "CRVUSD": "crvusd",
-    "SKY": "sky",
-    "API3": "api3",
-    "BAND": "band-protocol",
-    "TELLOR": "tellor",
-    "UMA": "uma",
-    "ANKR": "ankr",
-    "STORJ": "storj",
-    "SIA": "siacoin",
-    "FILECOIN": "filecoin",
-    "AR": "arweave",
-    "THETA": "theta-token",
-    "TFUEL": "theta-fuel",
-    "LINK": "chainlink",
-    "RENDER": "render-token",
-    "FET": "fetch-ai",
-    "WLD": "worldcoin-wld",
-    "AIOZ": "aioz-network",
-    "VIRTUAL": "virtual-protocol",
-    "ARKM": "arkham",
-    "GRT": "the-graph",
-    "NMR": "numeraire",
-    "PAAL": "paal-ai",
-    "PRIME": "hastra-prime",
-    "CGPT": "chaingpt",
-    "TRIAS": "trias-token",
-    "ALT": "altlayer",
-    "TAO": "bittensor",
-    "JUP": "jupiter-exchange-solana",
-    "PYTH": "pyth-network",
-    "JTO": "jito-governance-token",
-    "ORCA": "orca",
-    "RAY": "raydium",
-    "MNGO": "mango-markets",
-    "SAMO": "samoyedcoin",
-    "ATLAS": "star-atlas",
-    "POLIS": "star-atlas-dao",
-    "SHDW": "genesysgo-shadow",
-    "SLND": "solend",
-    "ILV": "illuvium",
-    "AXS": "axie-infinity",
-    "SAND": "the-sandbox",
-    "MANA": "decentraland",
-    "GALA": "gala",
-    "KMNO": "kamino",
-    "METEORA": "meteora",
-    "KAMINO": "kamino",
-    "ZETA": "zetachain",
-    "CETUS": "cetus-protocol",
+    # MEME
+    "PEPE": "pepe", "SHIB": "shiba-inu", "DOGE": "dogecoin", "BONK": "bonk", "WIF": "dogwifcoin",
+    "FLOKI": "floki", "POPCAT": "popcat", "PNUT": "peanut-the-squirrel", "NEIRO": "neiro-3", "TURBO": "turbo",
+    "MOG": "mog-coin", "BRETT": "based-brett", "GOAT": "goatseus-maximus", "ACT": "act-i-the-ai-prophecy",
+    "MEW": "cat-in-a-dogs-world", "BANANA": "banana-gun", "LADYS": "milady-meme-coin", "WOJAK": "wojak-2",
+    "CHAD": "chad-coin", "BILLY": "billy-2", "SLERF": "slerf", "BOME": "book-of-meme", "ZERO": "zerolend",
+    "GIGA": "giga-2", "PONKE": "ponke-sol", "MYRO": "myro-2", "SILLY": "silly-dragon", "RETARDIO": "retardio",
+    "MICHI": "michi-2", "BOOK": "book-of-crypto", "SIGMA": "sigma-3", "MANEKI": "maneki", "PORK": "pork-2",
+    "MOODENG": "moo-deng", "CHILLGUY": "chill-guy", "FWOG": "fwog", "GORK": "gork", "HOPPY": "hoppy",
+    "MAGA": "maga", "TREMP": "doland-tremp", "BODEN": "jeo-boden", "HARAMBE": "harambe-ai", "MUMU": "mumu-the-bull-3",
+    "DUKO": "duko", "MEOW": "meow", "MINI": "mini", "PUPS": "pups-world-peace", "SNEK": "snek",
+    "SLOTH": "slothana", "NUBS": "nubs",
+    # AI
+    "TAO": "bittensor", "RENDER": "render-token", "FET": "fetch-ai", "WLD": "worldcoin-wld", "AIOZ": "aioz-network",
+    "VIRTUAL": "virtual-protocol", "ARKM": "arkham", "GRT": "the-graph", "OCEAN": "ocean-protocol",
+    "AGIX": "singularitynet", "NMR": "numeraire", "CTXC": "cortex", "ALT": "altlayer", "PAAL": "paal-ai",
+    "OLAS": "autonolas", "PRIME": "hastra-prime", "CGPT": "chaingpt", "TRIAS": "trias-token",
+    "COVALENT": "covalent", "BITTENSOR": "bittensor", "GRASS": "grass", "MASA": "masa-finance",
+    "DEAI": "deai", "AIUS": "aius", "ULTI": "ulti", "SENTAI": "sentai", "KAGENT": "kagent",
+    # DEFI
+    "AAVE": "aave", "UNI": "uniswap", "CRV": "curve-dao-token", "MKR": "maker", "SNX": "havven",
+    "COMP": "compound-governance-token", "SUSHI": "sushi", "YFI": "yearn-finance", "1INCH": "1inch",
+    "GMX": "gmx", "GNS": "gains-network", "DYDX": "dydx-chain", "PENDLE": "pendle", "RDNT": "radiant-capital",
+    "VELA": "vela-token", "ETHFI": "ether-fi", "EIGEN": "eigenlayer", "LISTA": "lista-dao",
+    "ZRO": "layerzero", "USUAL": "usual", "SKY": "sky", "COW": "cow-protocol", "FLUID": "instadapp",
+    "FRAX": "frax", "LUSD": "liquity-usd", "MKUSD": "prisma-mkusd", "RESOLV": "resolv",
+    "MORPHO": "morpho", "EULER": "euler", "VENUS": "venus", "ALPACA": "alpaca-finance",
+    "RADIANT": "radiant-capital", "GEIST": "geist-finance", "GRANARY": "granary", "EXACTLY": "exactly-protocol",
+    "SILO": "silo-finance",
+    # L1/L2
+    "ARB": "arbitrum", "OP": "optimism", "MATIC": "polygon-ecosystem-token", "IMX": "immutable-x",
+    "METIS": "metis-token", "STRK": "starknet", "MANTA": "manta-network", "SCROLL": "scroll",
+    "ZK": "zksync", "TAIKO": "taiko", "BLAST": "blast", "MODE": "mode", "LINEA": "linea",
+    "BASE": "base", "MANTLE": "mantle", "ZKSYNC": "zksync", "STARKNET": "starknet", "POLYGON": "polygon",
+    "OPTIMISM": "optimism", "ARBITRUM": "arbitrum", "AVALANCHE": "avalanche-2", "FANTOM": "fantom",
+    "HARMONY": "harmony", "CELO": "celo", "MOONBEAM": "moonbeam",
+    # SOL
+    "JUP": "jupiter-exchange-solana", "PYTH": "pyth-network", "JTO": "jito-governance-token", "ORCA": "orca",
+    "RAY": "raydium", "MNGO": "mango-markets", "SAMO": "samoyedcoin", "STEP": "step-finance",
+    "COPE": "cope", "MEDIA": "media-network", "ATLAS": "star-atlas", "POLIS": "star-atlas-dao",
+    "SHDW": "genesysgo-shadow", "HONEY": "hivemapper", "TULIP": "tulip-protocol", "PORT": "port-finance",
+    "SLND": "solend", "LARIX": "larix", "DRIFT": "drift-protocol", "ZETA": "zetachain",
+    "MARGINFI": "marginfi", "KAMINO": "kamino", "METEORA": "meteora", "RAYDIUM": "raydium",
+    "LIFINITY": "lifinity", "MARINADE": "marinade",
+    # GAMING/NFT
+    "AXS": "axie-infinity", "SAND": "the-sandbox", "MANA": "decentraland", "GALA": "gala",
+    "ILV": "illuvium", "YGG": "yield-guild-games", "MAGIC": "magic", "BEAM": "beam-2", "RON": "ronin",
+    "PIXEL": "pixels", "PORTAL": "portal-2", "MAVIA": "heroes-of-mavia", "SAGA": "saga-2",
+    "NAKA": "nakamoto-games", "HERO": "hero-blaze-three-kingdoms", "PVU": "plant-vs-undead",
+    "DREAMS": "dreams-quest", "GUILD": "guild-of-guardians", "HEROES": "heroes", "SIDUS": "sidus",
+    "DERACE": "derace", "MOBOX": "mobox", "STEPN": "stepn", "GMT": "stepn", "GST": "green-satoshi-token",
+    "SWEAT": "sweatcoin", "FITFI": "step-app-fitfi", "GENOPETS": "genopets",
+    # NEW 2024-2025
+    "DOGS": "dogs-2", "HMSTR": "hamster-kombat", "CATI": "catizen", "MAJOR": "major", "BLUM": "blum-2",
+    "NOT": "notcoin", "GRAM": "gram-2", "ONDO": "ondo-finance", "OMNI": "omni-network", "SAFE": "safe",
+    "AEVO": "aevo", "WEN": "wen-4", "JITO": "jito-governance-token", "RESISTANCE": "resistance-dog",
+    "REZ": "renzo", "MERLIN": "merlin-chain", "RUNE": "thorchain", "PYUSD": "paypal-usd",
+    "USDM": "megausd", "FRXETH": "frax-ether", "SFRXETH": "staked-frax-ether", "STETH": "staked-ether",
+    # INFRA
+    "LINK": "chainlink", "BAND": "band-protocol", "API3": "api3", "UMA": "uma", "TELLOR": "tellor",
+    "DIA": "dia-data", "FLUX": "zelcash", "ANKR": "ankr", "POWR": "power-ledger", "STORJ": "storj",
+    "SIA": "siacoin", "AR": "arweave", "THETA": "theta-token", "TFUEL": "theta-fuel", "HELIUM": "helium",
+    "HNT": "helium", "MOBILE": "helium-mobile", "IOT": "helium-iot", "JASMY": "jasmycoin", "IOTX": "iotex",
 }
 
 SYMBOL_MAP: dict[str, str] = {**_SYMBOL_BASE, **SYMBOL_MAP_EXTRA}
-
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -518,11 +426,11 @@ class CryptoAnalyzer:
         )
 
         if ema20 and ema50 and last_p > ema20 > ema50:
-            trend_ru = "BULL"
+            trend_ru = "📈 Бычий"
         elif ema20 and ema50 and last_p < ema20 < ema50:
-            trend_ru = "BEAR"
+            trend_ru = "📉 Медвежий"
         else:
-            trend_ru = "БОКОВИК"
+            trend_ru = "📊 Боковик"
 
         ema20s = _fmt_price(ema20) if ema20 else "—"
         ema50s = _fmt_price(ema50) if ema50 else "—"
@@ -548,16 +456,17 @@ class CryptoAnalyzer:
             f"📊 *{name} ({sym_real})* {rank_s}\n"
             f"💰 Цена: {_fmt_price(price)}\n"
             f"📈 1ч: {ch1h:.2f}% | 24ч: {ch24:.2f}% | 7д: {ch7:.2f}% | 30д: {ch30:.2f}%\n"
-            f"🏦 Капа: {_fmt_usd(mcap)} | Объём 24ч: {_fmt_usd(vol24)}\n"
+            f"🏦 Капа: {_fmt_usd(mcap)} | Объём: {_fmt_usd(vol24)}\n"
             f"📉 От ATH: {ath_ch:.2f}% | ATH: {_fmt_price(ath)}\n\n"
             f"━━━ ТЕХНИЧЕСКИЙ АНАЛИЗ ━━━\n"
             f"RSI (14): {rsi} — {_rsi_label(rsi).upper()}\n"
             f"MACD: {macd_dir.upper()} (гист: {hist_s})\n"
             f"Bollinger: {bb_pos.upper()}\n"
             f"EMA 20: {ema20s} | EMA 50: {ema50s}\n"
-            f"Тренд: {trend_ru}\n\n"
+            f"Тренд EMA: {trend_ru}\n\n"
             f"━━━ ОБЪЁМ ━━━\n"
-            f"Vol/MCap: {vol_ratio:.1f}% ({assess.upper()})\n\n"
+            f"Vol/MCap: {vol_ratio:.1f}% — {assess.upper()}\n"
+            f"Объём аномальный: {'ДА' if vol_ratio >= 20 else 'НЕТ'}\n\n"
             f"━━━ ОНЧЕЙН ━━━\n"
             f"{fg_line}\n"
             f"🏊 TVL: {_fmt_usd(tvl)}\n\n"
@@ -645,7 +554,7 @@ class CryptoAnalyzer:
                 break
 
         lines = ["🔥 *Новые идеи (CoinGecko)*\n"]
-        for tag, obj in picked[:10]:
+        for tag, obj in picked[:9]:
             if tag == "trending":
                 name = obj.get("name", "")
                 sym = (obj.get("symbol") or "").upper()
@@ -723,17 +632,24 @@ class CryptoAnalyzer:
 
     async def find_scam_whales_results(self) -> list[dict[str, Any]]:
         try:
-            rows = await self._get_json(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "market_cap_desc",
-                    "per_page": 250,
-                    "page": 1,
-                    "price_change_percentage": "24h,7d",
-                },
-                ttl=180,
+            page1, page2, page3 = await asyncio.gather(
+                self._get_json(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 100, "page": 1, "price_change_percentage": "24h,7d"},
+                    ttl=180,
+                ),
+                self._get_json(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 100, "page": 2, "price_change_percentage": "24h,7d"},
+                    ttl=180,
+                ),
+                self._get_json(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 100, "page": 3, "price_change_percentage": "24h,7d"},
+                    ttl=180,
+                ),
             )
+            rows = (page1 or []) + (page2 or []) + (page3 or [])
         except Exception:
             return []
 
