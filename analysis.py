@@ -198,6 +198,36 @@ class CryptoAnalyzer:
         rsi = 50 + ch7 * 0.4 + ch24 * 0.3
         return max(5.0, min(95.0, rsi))
 
+    def _coin_category(self, name: str, symbol: str) -> str:
+        txt = f"{name} {symbol}".lower()
+        if any(k in txt for k in ["pepe", "doge", "shib", "bonk", "wif", "floki", "meme", "cat", "frog"]):
+            return "MEME"
+        if any(k in txt for k in ["aave", "uni", "defi", "curve", "maker", "pendle", "comp"]):
+            return "DEFI"
+        if any(k in txt for k in ["tao", "render", "fet", "wld", "ai", "ocean", "grt", "aioz", "virtual"]):
+            return "AI"
+        if any(k in txt for k in ["arb", "op", "matic", "zk", "layer", "l2", "optimism", "arbitrum"]):
+            return "LAYER2"
+        if any(k in txt for k in ["game", "gala", "axs", "mana", "sand", "pixel", "ron"]):
+            return "GAMING"
+        return "GENERAL"
+
+    async def _coin_detail(self, coin_id: str, ttl: int = 300) -> dict[str, Any]:
+        data = await self._get_json(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+            {
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "true",
+                "community_data": "true",
+                "developer_data": "true",
+                "sparkline": "false",
+            },
+            ttl=ttl,
+        )
+        await asyncio.sleep(1.1)
+        return data or {}
+
     async def fetch_all_coins(self) -> list[dict[str, Any]]:
         cached = self.cache.get("all_coins", ttl=300)
         if cached is not None:
@@ -543,54 +573,265 @@ class CryptoAnalyzer:
         return text
 
     async def find_scam_whales_results(self) -> list[dict[str, Any]]:
-        coins = await self.fetch_all_coins()
-        out = []
+        coins = sorted(await self.fetch_all_coins(), key=lambda x: safe_float(x.get("market_cap")), reverse=True)[:60]
+        out: list[dict[str, Any]] = []
         for c in coins:
+            cid = str(c.get("id") or "")
+            if not cid:
+                continue
             mcap = safe_float(c.get("market_cap"))
             vol = safe_float(c.get("total_volume"))
             ch24 = safe_float(c.get("price_change_percentage_24h"))
             ch7 = safe_float(c.get("price_change_percentage_7d_in_currency"))
-            rank = int(safe_float(c.get("market_cap_rank"), 9999))
-            if mcap <= 0:
+            price = safe_float(c.get("current_price"))
+            if mcap <= 0 or price <= 0:
                 continue
-            vm = vol / mcap
-            risk = 20
-            flags = []
-            if mcap > 10_000_000 and ch24 < -10 and vm > 0.15:
-                risk += 35; flags.append("WHALE DUMP")
-            if ch7 > 50 and ch24 < -5 and vm > 0.2:
-                risk += 35; flags.append("PUMP AND DUMP")
-            if rank > 200 and mcap > 50_000_000 and vm > 0.3:
-                risk += 25; flags.append("NEW SCAM")
+            vm = vol / max(mcap, 1)
+            rsi = self._calc_approx_rsi(c)
+            risk = 10
+            reasons: list[str] = []
+            detail = await self._coin_detail(cid, ttl=420)
+            md = detail.get("market_data") or {}
+            community_score = safe_float(detail.get("community_score"))
+            dev_score = safe_float(detail.get("developer_score"))
+            ath = safe_float((md.get("ath") or {}).get("usd"), safe_float(c.get("ath")))
+            ath_diff = abs(((ath - price) / max(ath, 1)) * 100) if ath > 0 else 100
+            genesis = str(detail.get("genesis_date") or "")
+            age_days = 9999
+            if genesis and len(genesis) >= 10:
+                try:
+                    y, m, d = genesis.split("-")
+                    now = time.time()
+                    age_days = int((now - time.mktime((int(y), int(m), int(d), 0, 0, 0, 0, 0, 0))) / 86400)
+                except Exception:
+                    age_days = 9999
+            if age_days < 30:
+                risk += 18
+                reasons.append(f"Новый листинг: {age_days} дней")
+            if vm > 0.5:
+                risk += 22
+                reasons.append(f"Vol/MCap {vm*100:.1f}% (аномально высокий)")
+            elif vm > 0.3:
+                risk += 12
+                reasons.append(f"Vol/MCap {vm*100:.1f}% (повышенный)")
+            if ch7 > 50 and ch24 < -5:
+                risk += 20
+                reasons.append("Классический pump-dump: резкий рост 7д и слив 24ч")
+            if community_score < 20:
+                risk += 8
+                reasons.append(f"Низкий social score: {community_score:.1f}")
+            if dev_score < 20 and ch7 > 15:
+                risk += 12
+                reasons.append(f"Слабая разработка ({dev_score:.1f}) при сильном росте")
+            if ath_diff <= 5 and rsi > 75:
+                risk += 16
+                reasons.append(f"Около ATH ({ath_diff:.1f}% до пика) и RSI {rsi:.0f}")
+            risk = int(max(0, min(100, risk)))
+            recommendation = "SAFE"
+            if risk >= 75:
+                recommendation = "AVOID"
+            elif risk >= 55:
+                recommendation = "CAUTION"
+            elif risk >= 35:
+                recommendation = "INVESTIGATE"
             out.append(
                 {
                     "symbol": str(c.get("symbol", "")).upper(),
-                    "risk": min(100, risk),
-                    "price": safe_float(c.get("current_price")),
+                    "risk": risk,
+                    "price": price,
                     "mcap": mcap,
                     "vol": vol,
                     "ch24": ch24,
                     "ch7": ch7,
-                    "reasons": flags or ["Смешанные риски"],
-                    "verdict": "ВЕРОЯТНЫЙ ПАМП-И-ДАМП" if risk >= 70 else "ПОДОЗРИТЕЛЬНО",
+                    "reasons": reasons or ["Сигналы риска не выражены"],
+                    "verdict": recommendation,
+                    "age_days": age_days if age_days < 9999 else None,
+                    "community_score": community_score,
+                    "developer_score": dev_score,
+                    "rsi": rsi,
                 }
             )
         out.sort(key=lambda x: x["risk"], reverse=True)
-        return out[:8]
+        return out[:10]
 
     async def find_scam_whales(self) -> str:
         coins = await self.find_scam_whales_results()
         lines = ["🚨 *СКАМ-ДЕТЕКТОР: Монеты с признаками манипуляций*"]
         for c in coins[:8]:
             vm = c["vol"] / max(c["mcap"], 1) * 100
+            rec_emoji = {"AVOID": "⛔", "CAUTION": "⚠️", "INVESTIGATE": "🕵️", "SAFE": "✅"}.get(c["verdict"], "⚠️")
             lines.append(
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 f"🔴 *{c['symbol']}* — Риск: {c['risk']}/100\n"
                 f"💰 Цена: {self._fmt_price(c['price'])}\n"
                 f"🏦 Капа: {self._fmt_usd(c['mcap'])} | Объём: {self._fmt_usd(c['vol'])}\n"
                 f"📊 Vol/MCap: {vm:.1f}% ⚠️\n"
-                f"📈 7д: {c['ch7']:+.1f}% | 24ч: {c['ch24']:+.1f}%\n"
+                f"📈 7д: {c['ch7']:+.1f}% | 24ч: {c['ch24']:+.1f}% | RSI: {c['rsi']:.0f}\n"
+                f"👥 Social: {c['community_score']:.1f} | Dev: {c['developer_score']:.1f}\n"
                 f"🚨 Признаки:\n- " + "\n- ".join(c["reasons"]) +
-                f"\n💡 Вывод: {c['verdict']}\n⚡ /analyze {c['symbol']}\n━━━━━━━━━━━━━━━━━━━━"
+                f"\n💡 Рекомендация: {rec_emoji} *{c['verdict']}*\n⚡ /analyze {c['symbol']}\n━━━━━━━━━━━━━━━━━━━━"
+            )
+        return "\n".join(lines)
+
+    async def find_new_coins(self) -> str:
+        trending = await self._get_json("https://api.coingecko.com/api/v3/search/trending", ttl=120)
+        await asyncio.sleep(1.2)
+        new_list = await self._get_json("https://api.coingecko.com/api/v3/coins/list/new", ttl=300)
+        await asyncio.sleep(1.2)
+        market = await self._get_json(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            {"vs_currency": "usd", "order": "volume_desc", "per_page": 200, "page": 1, "price_change_percentage": "24h,7d"},
+            ttl=120,
+        )
+        trend_ids = {(x.get("item") or {}).get("id") for x in (trending.get("coins") or [])}
+        new_ids = {str(x.get("id")) for x in (new_list or []) if x.get("id")}
+        rows: list[dict[str, Any]] = []
+        for c in market or []:
+            cid = str(c.get("id") or "")
+            if not cid:
+                continue
+            detail_needed = cid in trend_ids or cid in new_ids
+            age_days = None
+            community = 0.0
+            if detail_needed:
+                detail = await self._coin_detail(cid, ttl=300)
+                community = safe_float(detail.get("community_score"))
+                gd = str(detail.get("genesis_date") or "")
+                if gd and len(gd) >= 10:
+                    try:
+                        y, m, d = gd.split("-")
+                        age_days = int((time.time() - time.mktime((int(y), int(m), int(d), 0, 0, 0, 0, 0, 0))) / 86400)
+                    except Exception:
+                        age_days = None
+            mcap = safe_float(c.get("market_cap"))
+            if mcap < 1_000_000:
+                continue
+            if age_days is not None and age_days > 90:
+                continue
+            vol = safe_float(c.get("total_volume"))
+            ch24 = safe_float(c.get("price_change_percentage_24h"))
+            ch7 = safe_float(c.get("price_change_percentage_7d_in_currency"))
+            vol_ratio = vol / max(mcap, 1)
+            if vol_ratio < 0.04 and ch24 < 3:
+                continue
+            cat = self._coin_category(str(c.get("name", "")), str(c.get("symbol", "")))
+            risk = 30
+            if age_days is not None and age_days < 30:
+                risk += 20
+            if vol_ratio > 0.5:
+                risk += 18
+            if ch24 > 20:
+                risk += 10
+            if community < 15 and community > 0:
+                risk += 10
+            why = []
+            if cid in trend_ids:
+                why.append("в trending CoinGecko")
+            if cid in new_ids:
+                why.append("новый листинг")
+            if vol_ratio > 0.1:
+                why.append("растущий объём")
+            if ch24 > 10:
+                why.append(f"импульс +{ch24:.1f}% за 24ч")
+            rows.append(
+                {
+                    "symbol": str(c.get("symbol", "")).upper(),
+                    "name": str(c.get("name", "")),
+                    "mcap": mcap,
+                    "age_days": age_days,
+                    "category": cat,
+                    "risk": int(min(100, risk)),
+                    "why": ", ".join(why) or "рыночный интерес",
+                }
+            )
+        rows.sort(key=lambda x: (x["risk"], x["mcap"]), reverse=True)
+        lines = ["🆕 *NEW COINS FINDER — новые монеты с потенциалом*"]
+        for c in rows[:10]:
+            age_txt = f"{c['age_days']} дн." if c["age_days"] is not None else "n/a"
+            lines.append(
+                f"\n*{c['symbol']}* ({c['name']})\n"
+                f"🏦 Капа: {self._fmt_usd(c['mcap'])} | ⏳ Возраст: {age_txt}\n"
+                f"🏷️ Категория: {c['category']} | ⚠️ Риск: {c['risk']}/100\n"
+                f"💡 Почему интересно: {c['why']}\n"
+                f"⚡ /analyze {c['symbol']}"
+            )
+        return "\n".join(lines) if len(lines) > 1 else "🆕 Новых монет с подходящими метриками пока нет."
+
+    async def meme_tracker(self) -> str:
+        watch = {"PEPE", "WIF", "BONK", "DOGE", "SHIB", "FLOKI", "BRETT", "TURBO", "MOG", "POPCAT", "NEIRO", "PENGU"}
+        rows = await self._get_json(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            {"vs_currency": "usd", "category": "meme-token", "order": "volume_desc", "per_page": 100, "page": 1, "price_change_percentage": "24h,7d"},
+            ttl=120,
+        )
+        await asyncio.sleep(1.1)
+        if not isinstance(rows, list):
+            rows = []
+        sel = [c for c in rows if str(c.get("symbol", "")).upper() in watch][:12]
+        lines = ["🐸 *MEME COINS TRACKER*"]
+        for c in sel:
+            sym = str(c.get("symbol", "")).upper()
+            ch24 = safe_float(c.get("price_change_percentage_24h"))
+            ch7 = safe_float(c.get("price_change_percentage_7d_in_currency"))
+            mcap = safe_float(c.get("market_cap"))
+            vol = safe_float(c.get("total_volume"))
+            rsi = self._calc_approx_rsi(c)
+            vol_ratio = vol / max(mcap, 1)
+            whale = "🐋" if vol_ratio > 0.35 else "—"
+            pump = "🚨 PUMP ALERT" if ch24 > 20 and vol_ratio > 0.3 else "—"
+            lines.append(
+                f"\n*{sym}* | {self._fmt_price(safe_float(c.get('current_price')))}\n"
+                f"📈 24ч: {ch24:+.1f}% | 7д: {ch7:+.1f}% | RSI: {rsi:.0f}\n"
+                f"📊 Vol anomaly: {vol_ratio*100:.1f}% | Whale: {whale}\n"
+                f"{pump}\n"
+                f"⚡ /analyze {sym}"
+            )
+        return "\n".join(lines) if len(lines) > 1 else "🐸 Мем-токены временно недоступны."
+
+    async def defi_tracker(self) -> str:
+        rows = await self._get_json("https://api.llama.fi/protocols", ttl=300)
+        if not isinstance(rows, list):
+            return "❌ DeFiLlama временно недоступен."
+        rows = sorted(rows, key=lambda x: safe_float(x.get("tvl")), reverse=True)
+        lines = ["🏦 *DEFI TRACKER — топ протоколы по TVL*"]
+        for r in rows[:10]:
+            ch1 = safe_float((r.get("change_1d") if r.get("change_1d") is not None else r.get("change_1h")))
+            ch7 = safe_float(r.get("change_7d"))
+            signal = "🟢 TVL растет" if ch1 > 0 and ch7 > 0 else "🟡 смешанная динамика" if ch7 > -5 else "🔴 TVL падает"
+            token = r.get("symbol") or "N/A"
+            lines.append(
+                f"\n*{r.get('name','?')}* ({token})\n"
+                f"💰 TVL: {self._fmt_usd(safe_float(r.get('tvl')))}\n"
+                f"📈 TVL 24ч: {ch1:+.2f}% | 7д: {ch7:+.2f}%\n"
+                f"📌 Сигнал: {signal}"
+            )
+        return "\n".join(lines)
+
+    async def ai_tracker(self) -> str:
+        ai_watch = {"TAO", "RENDER", "FET", "WLD", "AIOZ", "VIRTUAL", "GRT", "OCEAN", "RNDR"}
+        cat = await self._get_json(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            {"vs_currency": "usd", "category": "artificial-intelligence", "order": "market_cap_desc", "per_page": 100, "page": 1, "price_change_percentage": "24h,7d"},
+            ttl=180,
+        )
+        await asyncio.sleep(1.1)
+        btc_row = await self._get_json(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            {"vs_currency": "usd", "ids": "bitcoin", "price_change_percentage": "7d"},
+            ttl=120,
+        )
+        btc_7d = safe_float(((btc_row or [{}])[0] if isinstance(btc_row, list) else {}).get("price_change_percentage_7d_in_currency"))
+        rows = [c for c in (cat or []) if str(c.get("symbol", "")).upper() in ai_watch]
+        sector_7d = sum(safe_float(c.get("price_change_percentage_7d_in_currency")) for c in rows) / max(len(rows), 1)
+        delta = sector_7d - btc_7d
+        lines = [
+            "🤖 *AI TOKENS TRACKER*",
+            f"Сектор AI за 7д: {sector_7d:+.2f}% | BTC: {btc_7d:+.2f}% | Alpha: {delta:+.2f}%",
+        ]
+        for c in rows[:10]:
+            lines.append(
+                f"\n*{str(c.get('symbol','')).upper()}* — {self._fmt_price(safe_float(c.get('current_price')))}\n"
+                f"📈 24ч: {safe_float(c.get('price_change_percentage_24h')):+.2f}% | 7д: {safe_float(c.get('price_change_percentage_7d_in_currency')):+.2f}%\n"
+                f"🏦 Капа: {self._fmt_usd(safe_float(c.get('market_cap')))}"
             )
         return "\n".join(lines)

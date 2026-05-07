@@ -74,6 +74,13 @@ def main_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🆕 Новые монеты", callback_data="menu_new"),
     )
     builder.row(
+        InlineKeyboardButton(text="🐸 Meme Tracker", callback_data="menu_meme"),
+        InlineKeyboardButton(text="🏦 DeFi Tracker", callback_data="menu_defi"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🤖 AI Tracker", callback_data="menu_ai"),
+    )
+    builder.row(
         InlineKeyboardButton(text="⚡ Снайпер", callback_data="menu_sniper"),
         InlineKeyboardButton(text="📈 Топ сигналы", callback_data="menu_signals"),
     )
@@ -165,7 +172,10 @@ async def cb_menu(query: CallbackQuery):
 async def cb_help(query: CallbackQuery):
     save_user_id(query.from_user.id)
     await query.answer()
-    await query.message.answer("Команды: /analyze BTC /gems /signals /social /scam /overbought", reply_markup=back_keyboard())
+    await query.message.answer(
+        "Команды: /analyze BTC /gems /signals /social /scam /overbought /newcoins /meme /defi /ai",
+        reply_markup=back_keyboard(),
+    )
 
 
 @dp.callback_query(F.data == "menu_gems")
@@ -222,7 +232,40 @@ async def cb_new(query: CallbackQuery):
     await query.answer("🆕 Ищу...")
     msg = await query.message.answer("Ищу новые идеи...")
     try:
-        await msg.edit_text(await analyzer.find_new_potential(), parse_mode="Markdown", reply_markup=back_keyboard())
+        await msg.edit_text(await analyzer.find_new_coins(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.callback_query(F.data == "menu_meme")
+async def cb_meme(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    await query.answer("🐸 Загружаю...")
+    msg = await query.message.answer("Сканирую meme-token сектор...")
+    try:
+        await msg.edit_text(await analyzer.meme_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.callback_query(F.data == "menu_defi")
+async def cb_defi(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    await query.answer("🏦 Загружаю...")
+    msg = await query.message.answer("Получаю TVL из DeFiLlama...")
+    try:
+        await msg.edit_text(await analyzer.defi_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.callback_query(F.data == "menu_ai")
+async def cb_ai(query: CallbackQuery):
+    save_user_id(query.from_user.id)
+    await query.answer("🤖 Загружаю...")
+    msg = await query.message.answer("Сканирую сектор AI токенов...")
+    try:
+        await msg.edit_text(await analyzer.ai_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
     except Exception as e:
         await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 
@@ -320,6 +363,46 @@ async def cmd_overbought(message: Message):
     msg = await message.answer("🔥 Ищу перекупленные...")
     try:
         await msg.edit_text(await analyzer.find_overbought(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.message(Command("newcoins"))
+async def cmd_newcoins(message: Message):
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🆕 Ищу новые листинги...")
+    try:
+        await msg.edit_text(await analyzer.find_new_coins(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: Message):
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🐸 Загружаю meme tracker...")
+    try:
+        await msg.edit_text(await analyzer.meme_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.message(Command("defi"))
+async def cmd_defi(message: Message):
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🏦 Загружаю DeFiLlama...")
+    try:
+        await msg.edit_text(await analyzer.defi_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
+
+
+@dp.message(Command("ai"))
+async def cmd_ai(message: Message):
+    save_user_id(message.from_user.id)
+    msg = await message.answer("🤖 Сканирую AI-токены...")
+    try:
+        await msg.edit_text(await analyzer.ai_tracker(), parse_mode="Markdown", reply_markup=back_keyboard())
     except Exception as e:
         await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}", reply_markup=back_keyboard())
 

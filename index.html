@@ -3,86 +3,126 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CryptoSignal Terminal</title>
+  <title>CryptoSignal Pro</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-@import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
-:root{--bg:#04060f;--bg2:#070a15;--bg3:#0a0e1a;--card:#0c1022;--card2:#0f1428;--border:#141d35;--border2:#1c2840;--accent:#00ff88;--accent2:#00d4ff;--red:#ff3366;--yellow:#f59e0b;--purple:#8b5cf6;--orange:#f97316;--text:#e2e8f0;--muted:#4a5568;--muted2:#64748b;--glow:0 0 20px rgba(0,255,136,.25)}
-*{margin:0;padding:0;box-sizing:border-box} html,body{height:100%;overflow:hidden}
-body{background:var(--bg);color:var(--text);font-family:Inter,sans-serif;display:flex;flex-direction:column}
-header{height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-bottom:1px solid var(--border);background:var(--bg2)}
-.logo{font-family:Unbounded,sans-serif;font-size:14px}.logo span{color:var(--accent)}
-.header-stats{display:flex;gap:10px;font-size:12px;color:var(--muted2)}
-#fgBadge{padding:2px 8px;border-radius:999px;background:#0f1b31}
-.live-indicator{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted2)}
-.pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:var(--glow);animation:pulse 1.4s infinite}
-@keyframes pulse{50%{opacity:.4;transform:scale(.8)}}
-.tabs{height:40px;display:flex;gap:6px;padding:6px;background:var(--bg2);border-bottom:1px solid var(--border);overflow:auto}
-.tabs button{border:1px solid var(--border);background:var(--card);color:var(--muted2);padding:5px 10px;border-radius:999px;white-space:nowrap}
-.tabs .active{color:var(--accent);border-color:#1f3e35;box-shadow:var(--glow)}
-main{flex:1;overflow:auto;padding:10px;background:radial-gradient(circle at 0 0,#0d1630 0,transparent 40%),var(--bg)}
-.page{display:none}.page.active{display:block}
-.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
-input,select,button{background:var(--card2);border:1px solid var(--border2);color:var(--text);padding:8px;border-radius:10px}
-#marketProgress{font-size:12px;color:var(--muted2);margin-bottom:8px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px}
-.badges{display:flex;gap:5px;flex-wrap:wrap}.b{font-size:11px;padding:2px 6px;border-radius:999px}.buy{background:#0b2a21;color:var(--accent)}.sell{background:#341122;color:var(--red)}.wait{background:#2f2411;color:var(--yellow)}
-.price{font-family:'JetBrains Mono',monospace;font-size:20px;margin:8px 0}
-.table{width:100%;border-collapse:collapse}.table td,.table th{border-bottom:1px solid var(--border);padding:6px;text-align:left}
-.mobile-tabs{display:none;position:fixed;left:0;right:0;bottom:0;height:46px;background:var(--bg2);border-top:1px solid var(--border)}
-.mobile-tabs button{flex:1;background:none;border:none;color:var(--muted2)}
-.mobile-tabs .active{color:var(--accent)}
-@media(max-width:900px){.tabs{display:none}.mobile-tabs{display:flex}main{padding-bottom:56px}}
+@import url("https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700&family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap");
+:root{--bg:#060810;--bg2:#080c16;--card:#0c1220;--border:#151e35;--accent:#00ff88;--accent2:#00c8ff;--red:#ff2d55;--yellow:#f59e0b;--purple:#8b5cf6;--text:#e2e8f0;--muted:#64748b}
+*{box-sizing:border-box}body,html{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,sans-serif}
+body{display:flex;flex-direction:column}
+header{padding:10px;border-bottom:1px solid var(--border);background:linear-gradient(120deg,#0d1529,#070b15)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px}.logo{font-family:Unbounded,sans-serif}.logo span{color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:8px;margin-top:8px}.stat{background:rgba(12,18,32,.85);backdrop-filter:blur(10px);border:1px solid var(--border);padding:8px;border-radius:10px}
+.k{font-size:11px;color:var(--muted)}.v{font-family:"JetBrains Mono",monospace;font-size:13px}
+.tabs{display:flex;gap:6px;padding:8px;overflow:auto;border-bottom:1px solid var(--border)}
+.tabs button,.pills button,.preset{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:7px 10px;border-radius:999px;white-space:nowrap}
+.tabs .active,.pills .active{color:var(--accent);box-shadow:0 0 20px rgba(0,255,136,.25)}
+main{flex:1;overflow:auto;padding:10px}.page{display:none}.page.active{display:block}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}input,select,button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+.card{background:rgba(12,18,32,.92);border:1px solid var(--border);border-radius:12px;padding:10px;cursor:pointer}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.muted{color:var(--muted);font-size:12px}.price{font-family:"JetBrains Mono",monospace;font-size:20px}
+.badge{font-size:11px;padding:2px 6px;border-radius:999px}.buy{background:#093426;color:var(--accent)}.sell{background:#351120;color:var(--red)}.wait{background:#34290f;color:var(--yellow)}.new{background:#21143f;color:#c4b5fd}
+.spark{width:100%;height:36px}
+.table{width:100%;border-collapse:collapse}.table td,.table th{border-bottom:1px solid var(--border);padding:7px;text-align:left;font-size:13px}
+.detail{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;z-index:20}.detail.open{display:block}
+.panel{position:absolute;right:0;top:0;height:100%;width:min(680px,100%);background:var(--bg2);padding:12px;overflow:auto;border-left:1px solid var(--border)}
+.panel canvas{background:#0b1120;border:1px solid var(--border);border-radius:10px;padding:6px;margin-top:8px}
+.news-filters{display:flex;gap:6px;overflow:auto;margin-bottom:10px}
+.mobile-tabs{display:none;position:fixed;bottom:0;left:0;right:0;border-top:1px solid var(--border);background:var(--bg2);z-index:8}
+.mobile-tabs button{flex:1;background:none;border:0;color:var(--muted);padding:10px}.mobile-tabs .active{color:var(--accent)}
+@media(max-width:900px){.tabs{display:none}.mobile-tabs{display:flex}main{padding-bottom:60px}.stats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:375px){.grid{grid-template-columns:1fr}.price{font-size:17px}.stat{padding:6px}.tabs button,.pills button,.preset{padding:6px 8px;font-size:12px}}
   </style>
 </head>
 <body>
 <header>
-  <div class="logo">⚡ <span>Crypto</span>Signal</div>
-  <div class="header-stats"><span id="totalMcap">MCap: —</span><span id="btcDom">BTC: —%</span><div id="fgBadge">F&G —</div></div>
-  <div class="live-indicator"><div class="pulse-dot"></div><span id="lastUpdate">обновлено —</span></div>
+  <div class="top"><div class="logo">⚡ <span>CryptoSignal</span> Pro</div><div id="lastUpdate" class="muted">обновлено —</div></div>
+  <div class="stats">
+    <div class="stat"><div class="k">Total MCap</div><div id="stMcap" class="v">—</div></div>
+    <div class="stat"><div class="k">BTC Dominance</div><div id="stBtc" class="v">—</div></div>
+    <div class="stat"><div class="k">24h Volume</div><div id="stVol" class="v">—</div></div>
+    <div class="stat"><div class="k">Active Coins</div><div id="stCoins" class="v">—</div></div>
+  </div>
 </header>
-<div class="tabs" id="tabs">
+<div class="tabs">
   <button class="active" data-tab="market">📊 Рынок</button><button data-tab="signals">🎯 Сигналы</button><button data-tab="screener">🔍 Скринер</button><button data-tab="scam">🚨 Скам</button><button data-tab="news">📰 Новости</button><button data-tab="portfolio">💼 Портфолио</button>
 </div>
 <main>
   <section id="market" class="page active">
-    <div class="toolbar"><input id="search" placeholder="Поиск монеты..." style="flex:1"><button class="f active" data-f="all">Все</button><button class="f" data-f="buy">🟢 Купить</button><button class="f" data-f="sell">🔴 Продать</button><button class="f" data-f="wait">🟡 Ждать</button><button class="f" data-f="over">🔥 Перекуплен</button><button class="f" data-f="under">💎 Перепродан</button><button class="f" data-f="new">🆕 Новые</button><button class="f" data-f="meme">🐸 Мемы</button></div>
-    <div id="marketProgress">Загрузка...</div>
+    <div class="toolbar"><input id="search" placeholder="Поиск..." style="flex:1"></div>
+    <div class="pills toolbar"><button class="active f" data-f="all">Все</button><button class="f" data-f="buy">🟢 Купить</button><button class="f" data-f="sell">🔴 Продать</button><button class="f" data-f="new">🆕 Новые</button><button class="f" data-f="meme">🐸 Мемы</button></div>
     <div id="marketGrid" class="grid"></div>
   </section>
   <section id="signals" class="page"><div id="signalsGrid" class="grid"></div></section>
-  <section id="screener" class="page"><div class="toolbar"><select id="scrSignal"><option>Все</option><option>Покупка</option><option>Продажа</option><option>Ждать</option></select><input type="range" id="rsiMin" min="0" max="100" value="0"><input type="range" id="rsiMax" min="0" max="100" value="100"><select id="scrChange"><option value="all">Любое</option><option value="up10">+10% и выше</option><option value="up5">+5% и выше</option><option value="down5">-5% и ниже</option><option value="down10">-10% и ниже</option></select><button onclick="runScreener()">🔍 ЗАПУСТИТЬ СКРИНЕР</button></div><div id="screenerCount"></div><table class="table"><thead><tr><th>Монета</th><th>Цена</th><th>24ч</th><th>RSI</th><th>Сигнал</th></tr></thead><tbody id="screenerResults"></tbody></table></section>
+  <section id="screener" class="page">
+    <div class="toolbar">
+      <button class="preset" data-p="oversold">RSI Oversold</button><button class="preset" data-p="volume">High Volume</button><button class="preset" data-p="newgems">New Gems</button><button class="preset" data-p="defi">DeFi</button><button class="preset" data-p="ai">AI Tokens</button><button class="preset" data-p="meme">Meme Coins</button>
+    </div>
+    <div class="toolbar">
+      <select id="scrSignal"><option value="all">Все</option><option value="buy">Купить</option><option value="sell">Продать</option></select>
+      <input id="rsiMin" type="number" min="0" max="100" value="0" placeholder="RSI min">
+      <input id="rsiMax" type="number" min="0" max="100" value="100" placeholder="RSI max">
+      <select id="scrCap"><option value="all">Капа: любая</option><option value="micro">Micro</option><option value="small">Small</option><option value="large">Large</option></select>
+      <button onclick="runScreener()">Запустить</button>
+    </div>
+    <div id="screenerCount" class="muted"></div>
+    <table class="table"><thead><tr><th>Монета</th><th>Цена</th><th>24ч</th><th>RSI</th><th>Сигнал</th></tr></thead><tbody id="screenerResults"></tbody></table>
+  </section>
   <section id="scam" class="page"><div id="scamGrid" class="grid"></div></section>
-  <section id="news" class="page"><div id="newsGrid" class="grid"></div></section>
-  <section id="portfolio" class="page"><div class="toolbar"><input id="pSym" placeholder="SYMBOL"><input id="pAmt" type="number" placeholder="Amount"><input id="pBuy" type="number" placeholder="Buy Price"><button onclick="addPos()">Добавить</button></div><div id="portfolioSummary"></div><div id="portfolioGrid" class="grid"></div><canvas id="portfolioChart"></canvas></section>
+  <section id="news" class="page">
+    <div class="news-filters"><button class="nf active" data-nf="all">All</button><button class="nf" data-nf="reddit">Reddit</button><button class="nf" data-nf="news">News</button><button class="nf" data-nf="defi">DeFi</button><button class="nf" data-nf="meme">Meme</button></div>
+    <div id="newsGrid" class="grid"></div>
+  </section>
+  <section id="portfolio" class="page">
+    <div class="toolbar"><input id="pSym" placeholder="SYMBOL"><input id="pAmt" type="number" placeholder="Amount"><input id="pBuy" type="number" placeholder="Buy price"><button onclick="addPos()">Добавить</button></div>
+    <div id="portfolioSummary"></div><div id="portfolioGrid" class="grid"></div>
+  </section>
 </main>
-<div class="mobile-tabs" id="mtabs"><button class="active" data-tab="market">📊</button><button data-tab="signals">🎯</button><button data-tab="screener">🔍</button><button data-tab="scam">🚨</button><button data-tab="news">📰</button><button data-tab="portfolio">💼</button></div>
+<div class="mobile-tabs"><button class="active" data-tab="market">📊</button><button data-tab="signals">🎯</button><button data-tab="screener">🔍</button><button data-tab="scam">🚨</button><button data-tab="news">📰</button><button data-tab="portfolio">💼</button></div>
+<div id="detail" class="detail"><div class="panel"><button onclick="closeDetail()">Закрыть</button><div id="detailInfo"></div><canvas id="priceChart" height="140"></canvas><canvas id="rsiChart" height="100"></canvas></div></div>
 <script>
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let coins=[],filter='all',trendingIds=new Set();
-const memeKeywords=['pepe','doge','shib','bonk','wif','floki','cat','frog','meme'];
-const fmt=(n)=>n==null?'—':n>=1e12?`$${(n/1e12).toFixed(2)}T`:n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:n>=1?`$${n.toLocaleString('ru-RU',{maximumFractionDigits:4})}`:`$${(+n).toFixed(10).replace(/0+$/,'')}`;
-function calcSignal(coin){const ch24=coin.price_change_percentage_24h||0,ch7=coin.price_change_percentage_7d_in_currency||0,volRatio=(coin.total_volume/Math.max(coin.market_cap,1))*100;const rsi=Math.max(5,Math.min(95,50+ch7*.45+ch24*.35));let signal='ЖДАТЬ',sigClass='wait',score=50;if(rsi<30){signal='КУПИТЬ';sigClass='buy';score=80}else if(rsi<42){signal='ПОКУПАТЬ';sigClass='buy';score=65}else if(rsi<55){signal='ЖДАТЬ';sigClass='wait';score=50}else if(rsi<68){signal='ОСТОРОЖНО';sigClass='wait';score=35}else{signal='ПРОДАТЬ';sigClass='sell';score=20}if(ch24>10&&rsi<60)score+=10;if(volRatio>20)score+=5;return{signal,sigClass,score,rsi:Math.round(rsi),volRatio};}
-async function fetchAllMarketCoins(){const allCoins=[];const pages=10;for(let page=1;page<=pages;page++){try{const url=`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&price_change_percentage=1h,24h,7d&sparkline=true`;const resp=await fetch(url);if(resp.status===429){await sleep(3000);page--;continue;}const data=await resp.json();if(!Array.isArray(data)||!data.length)break;allCoins.push(...data);document.getElementById('marketProgress').textContent=`Загрузка: ${allCoins.length} монет...`;await sleep(1200);}catch(e){await sleep(2000);}}try{const trending=await fetch('https://api.coingecko.com/api/v3/search/trending').then(r=>r.json());window.trendingIds=new Set((trending.coins||[]).map(c=>c.item?.id));}catch(e){}const seen=new Set();const unique=allCoins.filter(c=>{if(seen.has(c.id))return false;seen.add(c.id);return true;});document.getElementById('marketProgress').textContent=`Рынок: ${unique.length} монет · CoinGecko`;return unique;}
-function card(c){const s=calcSignal(c),trend=trendingIds.has(c.id),ch=c.price_change_percentage_24h||0;return `<div class="card coin-item"><div class="row" style="display:flex;justify-content:space-between"><div><div><b>#${c.market_cap_rank||'—'} ${c.symbol.toUpperCase()}</b></div><div style="font-size:12px;color:#64748b">${c.name}</div></div><img src="${c.image}" width="28" height="28"></div><div class="badges"><span class="b ${s.sigClass}">${s.signal}</span><span class="b ${s.rsi<35?'buy':s.rsi>65?'sell':'wait'}">RSI ${s.rsi}</span>${trend?'<span class="b buy">🔥 TREND</span>':''}</div><div class="price">${fmt(c.current_price)}</div><div style="color:${ch>=0?'#00ff88':'#ff3366'}">24ч ${ch>=0?'+':''}${ch.toFixed(2)}%</div><div style="font-size:12px;color:#64748b">Vol/MCap: ${s.volRatio.toFixed(1)}%</div></div>`;}
-function currentFiltered(){const q=(search.value||'').toLowerCase();return coins.filter(c=>{const s=calcSignal(c);if(q && !(`${c.name} ${c.symbol}`.toLowerCase().includes(q)))return false;if(filter==='buy'&&!(s.rsi<42))return false;if(filter==='sell'&&!(s.rsi>65))return false;if(filter==='wait'&&!(s.rsi>=42&&s.rsi<=65))return false;if(filter==='over'&&!(s.rsi>65))return false;if(filter==='under'&&!(s.rsi<35))return false;if(filter==='new'&& !((c.market_cap_rank||999)>300))return false;if(filter==='meme'&&!memeKeywords.some(k=>`${c.name} ${c.symbol}`.toLowerCase().includes(k)))return false;return true;});}
-function renderMarket(){const rows=currentFiltered();marketGrid.innerHTML='';const chunk=rows.slice(0,220);for(const c of chunk){const div=document.createElement('div');div.innerHTML=card(c);marketGrid.appendChild(div.firstChild);} }
-function renderSignals(){const mapped=coins.map(c=>({c,s:calcSignal(c)}));const buy=mapped.filter(x=>x.s.rsi<42).sort((a,b)=>b.s.score-a.s.score).slice(0,20);const sell=mapped.filter(x=>x.s.rsi>65).sort((a,b)=>a.s.score-b.s.score).slice(0,20);signalsGrid.innerHTML=[...buy.map(x=>`<div class='card'><b>🟢 ${x.c.symbol.toUpperCase()}</b><div>RSI ${x.s.rsi} | Score ${x.s.score}</div><div>Вход ${fmt(x.c.current_price)} | Стоп ${fmt(x.c.current_price*.93)} | TP ${fmt(x.c.current_price*1.12)}</div></div>`),...sell.map(x=>`<div class='card'><b>🔴 ${x.c.symbol.toUpperCase()}</b><div>RSI ${x.s.rsi} | Score ${x.s.score}</div><div>Возможна коррекция</div></div>` )].join('');}
-function runScreener(){const rows=currentFiltered().map(c=>({c,s:calcSignal(c)}));screenerCount.textContent=`Найдено ${rows.length} монет из 1000+`;screenerResults.innerHTML=rows.slice(0,200).map(x=>`<tr><td>${x.c.symbol.toUpperCase()}</td><td>${fmt(x.c.current_price)}</td><td>${(x.c.price_change_percentage_24h||0).toFixed(2)}%</td><td>${x.s.rsi}</td><td>${x.s.signal}</td></tr>`).join('');}
-function detectScams(arr){return arr.map(c=>{const ch24=c.price_change_percentage_24h||0,ch7=c.price_change_percentage_7d_in_currency||0,vr=c.total_volume/Math.max(c.market_cap,1),rank=c.market_cap_rank||9999;let risk=0;const flags=[];if(ch7>100&&ch24<-10){risk+=40;flags.push(`📉 Памп +${ch7.toFixed(0)}%, теперь -${Math.abs(ch24).toFixed(0)}%`)}if(vr>.5){risk+=35;flags.push(`🔴 Объём ${(vr*100).toFixed(0)}%`) }else if(vr>.25){risk+=15;flags.push(`⚠️ Vol ${(vr*100).toFixed(0)}%`)}if(rank>300&&c.market_cap>5e7){risk+=25;flags.push('🆕 Новая монета с большой капой')}if(ch7>200){risk+=20;flags.push('🚀 Экстремальный рост')}if(ch24<-30){risk+=15;flags.push('📉 Дамп')}return {...c,risk:Math.min(100,risk),flags};}).filter(c=>c.risk>=25).sort((a,b)=>b.risk-a.risk).slice(0,30)}
-function renderScam(){const s=detectScams(coins);scamGrid.innerHTML=s.map(c=>`<div class='card'><b>${c.symbol.toUpperCase()}</b><div>Риск: ${c.risk}/100</div><div>${c.flags.slice(0,3).join('<br>')}</div></div>`).join('')||"<div class='card'>Нет явных скам-паттернов</div>";}
-async function fetchNews(){const all=[];try{const cc=await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=RU&sortOrder=popular&extraParams=CryptoSignalBot').then(r=>r.json());all.push(...(cc.Data||[]).slice(0,15).map(a=>({title:a.title,source:a.source_info?.name||a.source,url:a.url,time:a.published_on*1000,sentiment:'neut'})));}catch(e){}
-try{const tr=await fetch('https://api.coingecko.com/api/v3/search/trending').then(r=>r.json());all.push(...(tr.coins||[]).map(({item})=>({title:`🔥 ${item.name} (${item.symbol.toUpperCase()}) — в топе трендов`,source:'CoinGecko Trending',url:`https://www.coingecko.com/en/coins/${item.id}`,time:Date.now(),sentiment:'bull'})));}catch(e){}
-all.sort((a,b)=>b.time-a.time);newsGrid.innerHTML=all.slice(0,30).map(n=>`<div class='card'><div style='font-size:12px;color:#64748b'>${n.source}</div><a href='${n.url}' target='_blank' style='color:#e2e8f0;text-decoration:none'><b>${n.title}</b></a><div style='font-size:12px;color:#64748b'>${new Date(n.time).toLocaleString('ru-RU')}</div></div>`).join('');}
-function renderPortfolio(){const p=JSON.parse(localStorage.getItem('portfolio')||'[]');let totalValue=0,totalCost=0;const positions=p.map((pos,i)=>{const coin=coins.find(c=>c.symbol.toUpperCase()===String(pos.symbol).toUpperCase());const cur=coin?.current_price||pos.buyPrice;const val=cur*pos.amount,cost=pos.buyPrice*pos.amount,pnl=val-cost,pnlPct=cost>0?pnl/cost*100:0;totalValue+=val;totalCost+=cost;return {...pos,cur,val,pnl,pnlPct,index:i};});const totalPnl=totalValue-totalCost,totalPnlPct=totalCost>0?totalPnl/totalCost*100:0;portfolioSummary.innerHTML=`<div class='card'>Итого: ${fmt(totalValue)} | PnL: <span style='color:${totalPnl>=0?'#00ff88':'#ff3366'}'>${fmt(totalPnl)} (${totalPnlPct.toFixed(2)}%)</span></div>`;portfolioGrid.innerHTML=positions.map(p=>`<div class='card'><b>${p.symbol}</b><div>${p.amount} @ ${fmt(p.buyPrice)}</div><div>Текущая: ${fmt(p.cur)}</div><div style='color:${p.pnl>=0?'#00ff88':'#ff3366'}'>PnL ${fmt(p.pnl)} (${p.pnlPct.toFixed(2)}%)</div><button onclick='delPos(${p.index})'>Удалить</button></div>`).join('');}
-function addPos(){const symbol=pSym.value.toUpperCase().trim();const amount=+pAmt.value;const buyPrice=+pBuy.value;if(!symbol||!amount||!buyPrice)return;const p=JSON.parse(localStorage.getItem('portfolio')||'[]');p.push({symbol,amount,buyPrice});localStorage.setItem('portfolio',JSON.stringify(p));renderPortfolio();}
-function delPos(i){const p=JSON.parse(localStorage.getItem('portfolio')||'[]');p.splice(i,1);localStorage.setItem('portfolio',JSON.stringify(p));renderPortfolio();}
-function bindTabs(){[...document.querySelectorAll('[data-tab]')].forEach(b=>b.onclick=()=>{document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.getElementById(b.dataset.tab).classList.add('active');document.querySelectorAll('[data-tab]').forEach(x=>x.classList.remove('active'));document.querySelectorAll(`[data-tab='${b.dataset.tab}']`).forEach(x=>x.classList.add('active'));});}
-async function boot(){bindTabs();coins=await fetchAllMarketCoins();try{const glob=await fetch('https://api.coingecko.com/api/v3/global').then(r=>r.json());const d=glob.data||{};totalMcap.textContent=`MCap: ${fmt((d.total_market_cap||{}).usd||0)}`;btcDom.textContent=`BTC: ${((d.market_cap_percentage||{}).btc||0).toFixed(1)}%`;}catch(e){}try{const fg=await fetch('https://api.alternative.me/fng/').then(r=>r.json());fgBadge.textContent=`F&G ${((fg.data||[{}])[0].value||'—')}`;}catch(e){}
-lastUpdate.textContent=`обновлено ${new Date().toLocaleTimeString('ru-RU')}`;renderMarket();renderSignals();renderScam();await fetchNews();renderPortfolio();}
-search.oninput=renderMarket;document.querySelectorAll('.f').forEach(b=>b.onclick=()=>{document.querySelectorAll('.f').forEach(x=>x.classList.remove('active'));b.classList.add('active');filter=b.dataset.f;renderMarket();});
-setInterval(async()=>{coins=await fetchAllMarketCoins();renderMarket();renderSignals();renderScam();renderPortfolio();lastUpdate.textContent=`обновлено ${new Date().toLocaleTimeString('ru-RU')}`;},90000);
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const fmt=(n)=>n==null?"—":n>=1e12?`$${(n/1e12).toFixed(2)}T`:n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:n>=1?`$${n.toLocaleString("ru-RU",{maximumFractionDigits:4})}`:`$${(+n).toFixed(10).replace(/0+$/,"")}`;
+const meme=["pepe","doge","shib","bonk","wif","floki","cat","frog","meme"],aiTokens=["fet","rndr","tao","agix","ocean","arkm"],defi=["aave","uni","crv","mkr","pendle"];
+let coins=[],allCoins=[],filter="all",newsFilter="all",newsRows=[],sparkCharts={},detailPriceChart=null,detailRsiChart=null,screenerTag="all";
+function sig(c){const ch24=c.price_change_percentage_24h||0,ch7=c.price_change_percentage_7d_in_currency||0,r=Math.max(5,Math.min(95,50+ch7*0.45+ch24*0.35));const type=r<42?"buy":r>65?"sell":"wait";return{rsi:Math.round(r),type,text:type==="buy"?"ПОКУПАТЬ":type==="sell"?"ПРОДАВАТЬ":"ЖДАТЬ"}}
+async function fetchCoins(){const out=[];for(let p=1;p<=6;p++){try{const r=await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${p}&price_change_percentage=24h,7d&sparkline=true`);out.push(...await r.json());await sleep(700);}catch(e){}}return out}
+function sentiment(title){const t=title.toLowerCase();const bull=["surge","rally","pump","breakout","bull","рост","взлет"],bear=["crash","dump","hack","exploit","bear","падение","обвал"];if(bull.some(x=>t.includes(x)))return "🟢 bullish";if(bear.some(x=>t.includes(x)))return "🔴 bearish";return "⚪ neutral"}
+function extractCoins(text){const m=text.toUpperCase().match(/\$?[A-Z]{2,10}/g)||[];return [...new Set(m.map(x=>x.replace("$","")).filter(x=>x.length<=8))].slice(0,4).join(", ")}
+function isNewListing(c){if(!c.atl_date)return false;return (Date.now()-new Date(c.atl_date).getTime())<30*86400000}
+function marketFilter(c){const s=sig(c),str=`${c.name} ${c.symbol}`.toLowerCase();if((search.value||"").trim()&&!str.includes(search.value.toLowerCase()))return false;if(filter==="buy"&&s.type!=="buy")return false;if(filter==="sell"&&s.type!=="sell")return false;if(filter==="new"&&!isNewListing(c))return false;if(filter==="meme"&&!meme.some(k=>str.includes(k)))return false;return true}
+function cardHtml(c,i){const s=sig(c),chg=c.price_change_percentage_24h||0;return `<div class="card" onclick="openDetail('${c.id}')"><div class="row"><div><b>#${c.market_cap_rank||"—"} ${c.symbol.toUpperCase()}</b><div class="muted">${c.name}</div></div><img src="${c.image}" width="26" height="26"></div><div class="row" style="margin:6px 0"><span class="badge ${s.type}">${s.text}</span><span class="badge ${s.rsi<35?"buy":s.rsi>65?"sell":"wait"}">RSI ${s.rsi}</span>${isNewListing(c)?'<span class="badge new">NEW</span>':""}</div><div class="price">${fmt(c.current_price)}</div><div class="muted" style="color:${chg>=0?"var(--accent)":"var(--red)"}">24ч ${chg>=0?"+":""}${chg.toFixed(2)}%</div><canvas class="spark" id="spark-${i}"></canvas></div>`}
+function renderMarket(){const rows=coins.filter(marketFilter).slice(0,200);marketGrid.innerHTML=rows.map((c,i)=>cardHtml(c,i)).join("");rows.forEach((c,i)=>renderSpark(`spark-${i}`,c.sparkline_in_7d?.price||[]))}
+function renderSpark(id,data){const el=document.getElementById(id);if(!el||!data.length)return;if(sparkCharts[id])sparkCharts[id].destroy();const short=[0,1,2,3,4,5,6].map(x=>data[Math.floor((data.length-1)*(x/6))]||data[0]);sparkCharts[id]=new Chart(el,{type:"line",data:{labels:short.map((_,i)=>i+1),datasets:[{data:short,borderColor:short.at(-1)>=short[0]?"#00ff88":"#ff2d55",borderWidth:1.5,pointRadius:0,tension:.35}]},options:{plugins:{legend:{display:false}},scales:{x:{display:false},y:{display:false}},responsive:true,maintainAspectRatio:false}})}
+function renderSignals(){const m=coins.map(c=>({c,s:sig(c)}));const buy=m.filter(x=>x.s.type==="buy").slice(0,12),sell=m.filter(x=>x.s.type==="sell").slice(0,12);signalsGrid.innerHTML=[...buy.map(x=>`<div class="card" onclick="openDetail('${x.c.id}')"><b>🟢 ${x.c.symbol.toUpperCase()}</b><div>RSI ${x.s.rsi}</div><div>Вход ${fmt(x.c.current_price)} | Стоп ${fmt(x.c.current_price*.93)} | TP ${fmt(x.c.current_price*1.12)}</div></div>`),...sell.map(x=>`<div class="card" onclick="openDetail('${x.c.id}')"><b>🔴 ${x.c.symbol.toUpperCase()}</b><div>RSI ${x.s.rsi}</div><div>Вероятна коррекция</div></div>`)].join("")}
+function runScreener(){const min=+rsiMin.value,max=+rsiMax.value,ss=scrSignal.value,cap=scrCap.value;const rows=allCoins.filter(c=>{const s=sig(c),m=c.market_cap||0,name=`${c.name} ${c.symbol}`.toLowerCase();if(s.rsi<min||s.rsi>max)return false;if(ss!=="all"&&s.type!==ss)return false;if(cap==="micro"&&m>=1e8)return false;if(cap==="small"&&(m<1e8||m>=1e9))return false;if(cap==="large"&&m<1e10)return false;if(screenerTag==="defi"&&!defi.includes(c.symbol.toLowerCase()))return false;if(screenerTag==="ai"&&!aiTokens.includes(c.symbol.toLowerCase()))return false;if(screenerTag==="meme"&&!meme.some(k=>name.includes(k)))return false;return true});screenerCount.textContent=`Найдено ${rows.length}`;screenerResults.innerHTML=rows.slice(0,200).map(c=>{const s=sig(c);return `<tr><td>${c.symbol.toUpperCase()}</td><td>${fmt(c.current_price)}</td><td>${(c.price_change_percentage_24h||0).toFixed(2)}%</td><td>${s.rsi}</td><td>${s.text}</td></tr>`}).join("")}
+function applyPreset(p){screenerTag="all";scrCap.value="all";if(p==="oversold"){rsiMin.value=0;rsiMax.value=35;scrSignal.value="buy"}if(p==="volume"){rsiMin.value=20;rsiMax.value=70;scrSignal.value="all"}if(p==="newgems"){rsiMin.value=25;rsiMax.value=60;scrCap.value="micro"}if(p==="defi"){screenerTag="defi"}if(p==="ai"){screenerTag="ai"}if(p==="meme"){screenerTag="meme"}runScreener()}
+function renderScam(){const rows=coins.map(c=>{const ch24=c.price_change_percentage_24h||0,ch7=c.price_change_percentage_7d_in_currency||0,v=(c.total_volume||0)/Math.max(c.market_cap||1,1);let risk=0,f=[];if(ch7>80&&ch24<-8){risk+=40;f.push("Pump and dump")}if(v>.4){risk+=35;f.push("Vol/MCap аномалия")}if((c.market_cap_rank||999)>250&&(c.market_cap||0)>5e7){risk+=20;f.push("Новая монета с большой капой")}return{...c,risk:Math.min(100,risk),f}}).filter(x=>x.risk>=30).sort((a,b)=>b.risk-a.risk).slice(0,20);scamGrid.innerHTML=rows.map(x=>`<div class="card"><b>${x.symbol.toUpperCase()}</b><div>Риск ${x.risk}/100</div><div class="muted">${x.f.join(" · ")}</div></div>`).join("")||"<div class='card'>Подозрительных не найдено</div>"}
+async function fetchNews(){const out=[];try{const cg=await fetch("https://api.coingecko.com/api/v3/news").then(r=>r.json());(cg.data||[]).slice(0,15).forEach(n=>out.push({source:"coingecko",title:n.title,url:n.url,time:new Date(n.updated_at||n.created_at).getTime()||Date.now(),tag:"news"}));}catch(e){}
+try{const cp=await fetch("https://cryptopanic.com/api/free/v1/posts/?auth_token=free&kind=news").then(r=>r.json());(cp.results||[]).slice(0,20).forEach(n=>out.push({source:"cryptopanic",title:n.title,url:n.url,time:new Date(n.created_at).getTime(),tag:"news"}));}catch(e){}
+for(const [u,tag] of [["https://www.reddit.com/r/CryptoCurrency/hot.json?limit=25","reddit"],["https://www.reddit.com/r/CryptoMoonShots/hot.json?limit=25","meme"],["https://www.reddit.com/r/defi/hot.json?limit=25","defi"]]){try{const d=await fetch(u,{headers:{"User-Agent":"Mozilla/5.0"}}).then(r=>r.json());(d.data?.children||[]).slice(0,15).forEach(x=>out.push({source:"reddit",title:x.data.title,url:`https://reddit.com${x.data.permalink}`,time:(x.data.created_utc||0)*1000,tag}));await sleep(600);}catch(e){}}
+newsRows=out.sort((a,b)=>b.time-a.time);renderNews()}
+function renderNews(){const rows=newsRows.filter(n=>newsFilter==="all"||n.source===newsFilter||n.tag===newsFilter);newsGrid.innerHTML=rows.slice(0,40).map(n=>`<div class="card"><div class="muted">${n.source.toUpperCase()} · ${new Date(n.time).toLocaleString("ru-RU")}</div><a href="${n.url}" target="_blank" style="color:var(--text);text-decoration:none"><b>${n.title}</b></a><div class="muted">${sentiment(n.title)} · coins: ${extractCoins(n.title)||"—"}</div></div>`).join("")}
+async function openDetail(id){const c=coins.find(x=>x.id===id);if(!c)return;detail.classList.add("open");const det=await fetch(`https://api.coingecko.com/api/v3/coins/${id}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=true`).then(r=>r.json()).catch(()=>({market_data:{},developer_data:{}}));const md=det.market_data||{},dev=det.developer_data||{};detailInfo.innerHTML=`<h3>${c.name} (${c.symbol.toUpperCase()})</h3><div class="muted">Цена ${fmt(c.current_price)} · ATL ${fmt((md.atl||{}).usd||c.atl)} · Circulating ${fmt((md.circulating_supply)||c.circulating_supply||0)} · Total ${fmt((md.total_supply)||c.total_supply||0)} · Dev activity ${(dev.commit_count_4_weeks||0)} commits/4w</div>`;
+const ch=await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=7`).then(r=>r.json()).catch(()=>({prices:[],total_volumes:[]}));
+const p=(ch.prices||[]).map(x=>x[1]),v=(ch.total_volumes||[]).map(x=>x[1]);const labels=p.map((_,i)=>i+1);
+if(detailPriceChart)detailPriceChart.destroy();detailPriceChart=new Chart(priceChart,{data:{labels,datasets:[{type:"line",label:"Цена",data:p,borderColor:"#00c8ff",pointRadius:0,tension:.3,yAxisID:"y"},{type:"bar",label:"Объём",data:v,backgroundColor:"rgba(0,255,136,.25)",yAxisID:"y1"}]},options:{plugins:{legend:{labels:{color:"#e2e8f0"}}},scales:{x:{ticks:{display:false}},y:{ticks:{color:"#94a3b8"}},y1:{position:"right",grid:{display:false},ticks:{display:false}}}}});
+const rsi=[];for(let i=0;i<p.length;i++){const s=Math.max(0,i-14),chunk=p.slice(s,i+1);const dif=chunk.slice(1).map((x,j)=>x-chunk[j]);const up=dif.filter(x=>x>0).reduce((a,b)=>a+b,0)/14,down=Math.abs(dif.filter(x=>x<0).reduce((a,b)=>a+b,0)/14)||1;rsi.push(Math.max(0,Math.min(100,100-(100/(1+up/down)))));}
+if(detailRsiChart)detailRsiChart.destroy();detailRsiChart=new Chart(rsiChart,{type:"line",data:{labels,datasets:[{label:"RSI",data:rsi,borderColor:"#f59e0b",pointRadius:0,tension:.25}]},options:{plugins:{legend:{labels:{color:"#e2e8f0"}}},scales:{x:{ticks:{display:false}},y:{min:0,max:100,ticks:{color:"#94a3b8"}}}}})
+}
+function closeDetail(){detail.classList.remove("open")}
+function renderPortfolio(){const p=JSON.parse(localStorage.getItem("portfolio")||"[]");let tv=0,tc=0;const rows=p.map((x,i)=>{const c=coins.find(k=>k.symbol.toUpperCase()===x.symbol.toUpperCase());const cur=c?.current_price||x.buyPrice,val=cur*x.amount,cost=x.buyPrice*x.amount,pnl=val-cost;tv+=val;tc+=cost;return {...x,cur,pnl,val,i}});portfolioSummary.innerHTML=`<div class="card">Total ${fmt(tv)} | PnL <span style="color:${tv-tc>=0?'var(--accent)':'var(--red)'}">${fmt(tv-tc)}</span></div>`;portfolioGrid.innerHTML=rows.map(x=>`<div class="card"><b>${x.symbol}</b><div>${x.amount} @ ${fmt(x.buyPrice)}</div><div>${fmt(x.cur)}</div><div style="color:${x.pnl>=0?'var(--accent)':'var(--red)'}">${fmt(x.pnl)}</div><button onclick="delPos(${x.i})">Удалить</button></div>`).join("")}
+function addPos(){const p=JSON.parse(localStorage.getItem("portfolio")||"[]"),sym=pSym.value.toUpperCase().trim(),amount=+pAmt.value,buyPrice=+pBuy.value;if(!sym||!amount||!buyPrice)return;p.push({symbol:sym,amount,buyPrice});localStorage.setItem("portfolio",JSON.stringify(p));renderPortfolio()}
+function delPos(i){const p=JSON.parse(localStorage.getItem("portfolio")||"[]");p.splice(i,1);localStorage.setItem("portfolio",JSON.stringify(p));renderPortfolio()}
+async function fetchGlobal(){try{const d=(await fetch("https://api.coingecko.com/api/v3/global").then(r=>r.json())).data||{};stMcap.textContent=fmt((d.total_market_cap||{}).usd||0);stBtc.textContent=`${((d.market_cap_percentage||{}).btc||0).toFixed(1)}%`;stVol.textContent=fmt((d.total_volume||{}).usd||0);stCoins.textContent=(d.active_cryptocurrencies||"—")}catch(e){}}
+function bindTabs(){document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));document.getElementById(b.dataset.tab).classList.add("active");document.querySelectorAll("[data-tab]").forEach(x=>x.classList.remove("active"));document.querySelectorAll(`[data-tab='${b.dataset.tab}']`).forEach(x=>x.classList.add("active"))})}
+document.querySelectorAll(".f").forEach(b=>b.onclick=()=>{document.querySelectorAll(".f").forEach(x=>x.classList.remove("active"));b.classList.add("active");filter=b.dataset.f;renderMarket()});
+document.querySelectorAll(".nf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".nf").forEach(x=>x.classList.remove("active"));b.classList.add("active");newsFilter=b.dataset.nf;renderNews()});
+document.querySelectorAll(".preset").forEach(b=>b.onclick=()=>applyPreset(b.dataset.p));
+search.oninput=renderMarket;
+async function boot(){bindTabs();await fetchGlobal();coins=await fetchCoins();allCoins=[...coins];renderMarket();renderSignals();renderScam();await fetchNews();renderPortfolio();lastUpdate.textContent=`обновлено ${new Date().toLocaleTimeString("ru-RU")}`;runScreener()}
+setInterval(async()=>{await fetchGlobal();coins=await fetchCoins();allCoins=[...coins];renderMarket();renderSignals();renderScam();renderPortfolio();lastUpdate.textContent=`обновлено ${new Date().toLocaleTimeString("ru-RU")}`},90000);
 setInterval(fetchNews,300000);
 boot();
 </script>
