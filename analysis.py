@@ -391,6 +391,40 @@ class CryptoAnalyzer:
         self._last_gems = {str(x.get("id")) for x in selected if x.get("id")}
         return selected[:8]
 
+    async def find_gems_text(self) -> str:
+        selected = await self.find_gems()
+        if len(selected) < 8:
+            coins = await self.fetch_all_coins()
+            extra = sorted(
+                coins,
+                key=lambda x: safe_float(x.get("total_volume")) / max(safe_float(x.get("market_cap")), 1),
+                reverse=True,
+            )[:8]
+            selected = extra[:8]
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"]
+        lines = ["💎 *GEM FINDER — Монеты с потенциалом x10-x1000*"]
+        for i, c in enumerate(selected[:8]):
+            sym = str(c.get("symbol", "")).upper()
+            price = safe_float(c.get("current_price"))
+            mcap = safe_float(c.get("market_cap"))
+            vol = safe_float(c.get("total_volume"))
+            ch24 = safe_float(c.get("price_change_percentage_24h"))
+            ch7 = safe_float(c.get("price_change_percentage_7d_in_currency"))
+            vol_ratio = vol / max(mcap, 1) * 100
+            ath = safe_float(c.get("ath"))
+            ath_drop = ((price - ath) / ath * 100) if ath > 0 else 0
+            score = int(safe_float(c.get("gem_score"), 45))
+            potential = "🚀 x100-x1000" if mcap < 1_000_000 else "🚀 x20-x100" if mcap < 10_000_000 else "📈 x10-x20" if mcap < 50_000_000 else "📈 x5-x10"
+            lines.append(
+                f"\n{medals[i]} *{sym}* — Score: {score}/100\n"
+                f"💰 {self._fmt_price(price)} | Капа: {self._fmt_usd(mcap)}\n"
+                f"📊 Объём: {self._fmt_usd(vol)} ({vol_ratio:.1f}% от капы)\n"
+                f"📈 24ч: {ch24:+.1f}% | 7д: {ch7:+.1f}% | От ATH: {ath_drop:.0f}%\n"
+                f"🎯 Потенциал: {potential}\n"
+                f"⚡ /analyze {sym}"
+            )
+        return "\n".join(lines)
+
     async def top_signals(self) -> str:
         coins = await self.fetch_all_coins()
         scored = []
