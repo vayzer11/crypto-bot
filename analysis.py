@@ -111,6 +111,33 @@ class CryptoAnalyzer:
         if self._session and not self._session.closed:
             await self._session.close()
 
+    async def groq_chat(self, system: str, user: str, max_tokens: int = 180) -> str:
+        key = os.getenv("GROQ_API_KEY", "").strip()
+        if not key:
+            return "Groq недоступен: отсутствует GROQ_API_KEY."
+        session = await self._session_get()
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.6,
+            "max_tokens": max_tokens,
+        }
+        try:
+            async with session.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=payload,
+            ) as resp:
+                if resp.status >= 400:
+                    return "Groq временно недоступен."
+                data = await resp.json(content_type=None)
+            return str(((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")).strip() or "Пустой ответ Groq."
+        except Exception:
+            return "Ошибка сети при запросе к Groq."
+
     def _fmt_price(self, price: float) -> str:
         if price >= 10000:
             return f"${price:,.0f}"
