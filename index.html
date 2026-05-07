@@ -82,6 +82,7 @@
 <div class="bottom-nav" id="mnav"><button class="active" data-page="market">Рынок</button><button data-page="signals">Сигналы</button><button data-page="social">Соц</button><button data-page="screener">Скринер</button><button data-page="scam">Скам</button><button data-page="news">Новости</button><button data-page="portfolio">Портфель</button></div>
 <script>
 let rows=[],chart,pchart,selected,filter='all',last=Date.now(),pf=JSON.parse(localStorage.getItem('pf2')||'[]');
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
 const fmt=n=>n==null?'—':(n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(2)}K`:n>=1?`$${n.toLocaleString('ru-RU',{maximumFractionDigits:4})}`:`$${(+n).toFixed(8)}`);
 const rsi=a=>{if(!a||a.length<15)return 50;let g=0,l=0;for(let i=1;i<=14;i++){const d=a[i]-a[i-1];if(d>0)g+=d;else l-=d;}g/=14;l/=14;for(let i=15;i<a.length;i++){const d=a[i]-a[i-1];g=(g*13+Math.max(d,0))/14;l=(l*13+Math.max(-d,0))/14;}if(!l)return 100;const rs=g/l;return 100-100/(1+rs)}
 async function j(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();}
@@ -89,11 +90,34 @@ const sig=v=>v<35?'buy':v>70?'sell':'wait';
 function toast(t){const x=document.createElement('div');x.className='status';x.textContent=t;document.body.appendChild(x);setTimeout(()=>x.remove(),2200)}
 function skeleton(n=6){return Array.from({length:n},()=>'<div class="skeleton"></div>').join('')}
 function setStatus(){document.getElementById('status').textContent=`🔄 Обновлено ${Math.floor((Date.now()-last)/60000)} мин назад`}
+async function fetchAllCoins(){
+  const allCoins = [];
+  for (let page = 1; page <= 5; page++) {
+    try {
+      const data = await j(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&price_change_percentage=24h,7d&sparkline=true`);
+      if (!data || !data.length) break;
+      allCoins.push(...data);
+      await sleep(1000);
+    } catch {
+      break;
+    }
+  }
+  try {
+    const gainers = await j("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=percent_change_24h_desc&per_page=100&page=1&price_change_percentage=24h,7d");
+    allCoins.push(...(gainers || []));
+  } catch {}
+  const seen = new Set();
+  return allCoins.filter(c => {
+    if (seen.has(c.id)) return false;
+    seen.add(c.id);
+    return true;
+  });
+}
 async function load(){
   document.getElementById('marketGrid').innerHTML=skeleton(10); last=Date.now(); setStatus();
   try{
     const [m,fg,g,tr]=await Promise.all([
-      j('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=true&price_change_percentage=24h,7d'),
+      fetchAllCoins(),
       j('https://api.alternative.me/fng/'),
       j('https://api.coingecko.com/api/v3/global'),
       j('https://api.coingecko.com/api/v3/search/trending')

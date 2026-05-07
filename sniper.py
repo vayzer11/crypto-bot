@@ -132,11 +132,11 @@ async def scanner_loop(bot: Any) -> None:
                 sec = await checker.check_contract_security(token["contract"], token["chain"])
                 if sec.get("is_honeypot") is True:
                     continue
-                sell_tax = sec.get("sell_tax")
-                if sell_tax is None or float(sell_tax) >= 10:
+                sell_tax = sec.get("sell_tax") or 0
+                if float(sell_tax) > 10:
                     continue
                 score = calculate_x1000_score(token, sec)
-                if score < 40:
+                if score < 35:
                     continue
                 text = await _format_signal(token, sec, score)
                 for u in load_users():
