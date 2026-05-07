@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import aiohttp
@@ -14,6 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
 from analysis import CryptoAnalyzer
+from alerts import AlertManager, check_alerts_loop
 from sniper import get_sniper_status_text, scanner_loop
 
 load_dotenv()
@@ -24,6 +27,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 USERS_FILE = Path(__file__).resolve().parent / "users.json"
 
 analyzer = CryptoAnalyzer()
+alert_manager = AlertManager()
 dp = Dispatcher()
 
 
@@ -357,6 +361,8 @@ async def auto_broadcast_loop(bot: Bot) -> None:
                         await bot.send_message(uid, text, parse_mode="Markdown")
                     except Exception:
                         pass
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("auto broadcast error: %s", e)
         await asyncio.sleep(6 * 3600)
@@ -366,9 +372,28 @@ async def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN не задан")
     bot = Bot(token=BOT_TOKEN)  # ONE BOT INSTANCE ONLY
-    asyncio.create_task(scanner_loop(bot))
-    asyncio.create_task(auto_broadcast_loop(bot))
-    await dp.start_polling(bot)
+    scanner_task = asyncio.create_task(scanner_loop(bot), name="scanner_loop")
+    auto_broadcast_task = asyncio.create_task(auto_broadcast_loop(bot), name="auto_broadcast_loop")
+    check_alerts_task = asyncio.create_task(
+        check_alerts_loop(bot, analyzer, alert_manager),
+        name="check_alerts_loop",
+    )
+    auto_scan_task: asyncio.Task | None = None
+    tasks = [scanner_task, auto_broadcast_task, check_alerts_task]
+    if auto_scan_task is not None:
+        tasks.append(auto_scan_task)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        for task in tasks:
+            if task and not task.done():
+                task.cancel()
+        for task in tasks:
+            if task:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await analyzer.close()
+        await bot.session.close()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -87,3 +91,31 @@ class AlertManager:
                     next_alerts.append(a)
             self._alerts[user_id] = next_alerts
         return triggered
+
+
+async def check_alerts_loop(bot: Any, analyzer: Any, alert_manager: AlertManager, interval_sec: int = 75) -> None:
+    while True:
+        try:
+            coins = await analyzer.fetch_all_coins()
+            market_rows = [
+                {
+                    "symbol": str(c.get("symbol", "")).upper(),
+                    "price": float(c.get("current_price") or 0),
+                    "volume_1h": float(c.get("total_volume") or 0) / 24,
+                    "chain": str(c.get("platform", "") or ""),
+                    "age_hours": float(c.get("atl_date") and 999 or 999),
+                }
+                for c in coins
+                if c.get("symbol")
+            ]
+            triggered = alert_manager.evaluate(market_rows)
+            for user_id, text in triggered:
+                try:
+                    await bot.send_message(user_id, text)
+                except Exception as send_err:
+                    logger.warning("alert send failed %s: %s", user_id, send_err)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("check_alerts_loop error: %s", exc)
+        await asyncio.sleep(interval_sec)

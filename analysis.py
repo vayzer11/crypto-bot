@@ -98,24 +98,17 @@ def get_signal(rsi: float, macd_hist: float | None, change_24h: float, change_7d
 
 class CryptoAnalyzer:
     def __init__(self) -> None:
-        self._session: aiohttp.ClientSession | None = None
         self.cache = SmartCache()
         self._last_gems: set[str] = set()
 
-    async def _session_get(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        return self._session
-
     async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+        # Backward-compatible hook for shutdown paths.
+        self.cache.clear_old()
 
     async def groq_chat(self, system: str, user: str, max_tokens: int = 180) -> str:
         key = os.getenv("GROQ_API_KEY", "").strip()
         if not key:
             return "Groq недоступен: отсутствует GROQ_API_KEY."
-        session = await self._session_get()
         payload = {
             "model": GROQ_MODEL,
             "messages": [
@@ -126,14 +119,16 @@ class CryptoAnalyzer:
             "max_tokens": max_tokens,
         }
         try:
-            async with session.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json=payload,
-            ) as resp:
-                if resp.status >= 400:
-                    return "Groq временно недоступен."
-                data = await resp.json(content_type=None)
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json=payload,
+                ) as resp:
+                    if resp.status >= 400:
+                        return "Groq временно недоступен."
+                    data = await resp.json(content_type=None)
             return str(((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")).strip() or "Пустой ответ Groq."
         except Exception:
             return "Ошибка сети при запросе к Groq."
@@ -165,18 +160,19 @@ class CryptoAnalyzer:
         cached = self.cache.get(key, ttl=ttl)
         if cached is not None:
             return cached
-        session = await self._session_get()
         for i in range(3):
             try:
-                async with session.get(url, params=params) as resp:
-                    if resp.status == 429:
-                        await asyncio.sleep(2 + i)
-                        continue
-                    if resp.status >= 400:
-                        return {}
-                    data = await resp.json(content_type=None)
-                    self.cache.set(key, data)
-                    return data
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, params=params) as resp:
+                        if resp.status == 429:
+                            await asyncio.sleep(2 + i)
+                            continue
+                        if resp.status >= 400:
+                            return {}
+                        data = await resp.json(content_type=None)
+                        self.cache.set(key, data)
+                        return data
             except Exception:
                 if i == 2:
                     return {}
